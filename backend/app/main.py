@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from .routers import instrument
+from .routers import seebeck
 
 app = FastAPI(
     title="Seebeck Measurement System",
@@ -22,6 +23,11 @@ app.include_router(
     instrument.router,
     prefix="/api/instrument",
     tags=["instrument"]
+)
+app.include_router(
+    seebeck.router,
+    prefix="/api/seebeck",
+    tags=["seebeck"]
 )
 
 @app.get("/")

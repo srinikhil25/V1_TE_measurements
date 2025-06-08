@@ -1,6 +1,6 @@
 import { ThemeProvider, createTheme, CssBaseline, Box, Container } from '@mui/material';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import MeasurementPanel from './components/MeasurementPanel';
+import SeebeckMeasurementPanel from './components/SeebeckMeasurementPanel';
 
 const theme = createTheme({
   palette: {
@@ -27,7 +27,7 @@ function App() {
           py: 4
         }}>
           <Container maxWidth="lg">
-            <MeasurementPanel />
+            <SeebeckMeasurementPanel />
           </Container>
         </Box>
       </ThemeProvider>
