@@ -73,6 +73,7 @@ class MeasurementSessionManager:
             start_time = time.time()
 
             while self.session_active:
+                loop_start = time.time()
                 elapsed_time = int(time.time() - start_time)
                 # Voltage logic
                 if 1 <= kaisuu <= kaisuu1:
@@ -87,7 +88,6 @@ class MeasurementSessionManager:
                     volt = start_volt
 
                 self.seebeck_system.set_current(volt)
-                time.sleep(2)  # Instrument settling time (as in Streamlit)
                 result = self.seebeck_system.measure_all()
                 row = {
                     "Time [s]": elapsed_time,
@@ -100,7 +100,9 @@ class MeasurementSessionManager:
                 kaisuu += 1
                 if kaisuu > (kaisuu1 + kaisuu2 + kaisuu3 + kaisuu4):
                     break
-                for _ in range(int(interval * 10)):
+                elapsed = time.time() - loop_start
+                remaining = max(0, interval - elapsed)
+                for _ in range(int(remaining * 10)):
                     if not self.session_active:
                         break
                     time.sleep(0.1)
