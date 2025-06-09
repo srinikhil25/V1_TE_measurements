@@ -234,7 +234,7 @@ const SeebeckMeasurementPanel: React.FC = () => {
             </Typography>
             <Box sx={{ height: 250 }} ref={deltaGraphRef}>
               <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={data} margin={{ top: 10, right: 40, left: 40, bottom: 30 }}>
+                <LineChart data={data} margin={{ top: 10, right: 40, left: 40, bottom: 60 }}>
                   <CartesianGrid strokeDasharray="3 3" />
                   <XAxis
                     dataKey="Delta Temp [oC]"
