@@ -4,6 +4,9 @@ import {
 } from '@mui/material';
 import { CSVLink } from 'react-csv';
 import axios from 'axios';
+import {
+  LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer
+} from 'recharts';
 
 interface DataRow {
   "Time [s]": number;
@@ -127,6 +130,24 @@ const SeebeckMeasurementPanel: React.FC = () => {
         </Grid>
         <Grid item xs={12} md={8}>
           <Paper sx={{ p: 2 }}>
+            <Typography variant="h6" gutterBottom>
+              Live Graph
+            </Typography>
+            <Box sx={{ height: 300, mb: 2 }}>
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart data={data} margin={{ top: 10, right: 30, left: 0, bottom: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" />
+                  <XAxis dataKey="Time [s]" />
+                  <YAxis yAxisId="left" label={{ value: 'TEMF [mV]', angle: -90, position: 'insideLeft' }} />
+                  <YAxis yAxisId="right" orientation="right" label={{ value: 'Temp [°C]', angle: 90, position: 'insideRight' }} />
+                  <Tooltip />
+                  <Legend />
+                  <Line yAxisId="left" type="monotone" dataKey="TEMF [mV]" stroke="#1976d2" dot={false} name="TEMF [mV]" />
+                  <Line yAxisId="right" type="monotone" dataKey="Temp1 [oC]" stroke="#d32f2f" dot={false} name="Temp1 [°C]" />
+                  <Line yAxisId="right" type="monotone" dataKey="Temp2 [oC]" stroke="#388e3c" dot={false} name="Temp2 [°C]" />
+                </LineChart>
+              </ResponsiveContainer>
+            </Box>
             <Typography variant="h6" gutterBottom>
               Data Table
             </Typography>
