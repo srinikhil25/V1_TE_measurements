@@ -226,7 +226,13 @@ const SeebeckMeasurementPanel: React.FC = () => {
               <ResponsiveContainer width="100%" height="100%">
                 <LineChart data={data} margin={{ top: 10, right: 40, left: 40, bottom: 30 }}>
                   <CartesianGrid strokeDasharray="3 3" />
-                  <XAxis dataKey="Delta Temp [oC]" label={{ value: 'Delta Temp (Δt) / 差温度 [°C]', position: 'insideBottom', offset: -5 }} />
+                  <XAxis
+                    dataKey="Delta Temp [oC]"
+                    label={{ value: 'Delta Temp (Δt) / 差温度 [°C]', position: 'insideBottom', offset: -5 }}
+                    tickFormatter={(v) => v?.toFixed ? v.toFixed(2) : v}
+                    tick={{ angle: -30, fontSize: 12 }}
+                    tickCount={8}
+                  />
                   <YAxis label={{ value: 'TEMF [mV]', angle: -90, position: 'insideLeft' }} />
                   <Tooltip />
                   <Legend />
