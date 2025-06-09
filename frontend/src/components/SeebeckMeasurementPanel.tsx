@@ -38,6 +38,8 @@ const SeebeckMeasurementPanel: React.FC = () => {
   const [status, setStatus] = useState<any>(null);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const tableContainerRef = useRef<HTMLDivElement>(null);
+  const liveGraphRef = useRef<HTMLDivElement>(null);
+  const deltaGraphRef = useRef<HTMLDivElement>(null);
 
   // Poll session status and data
   useEffect(() => {
@@ -107,13 +109,52 @@ const SeebeckMeasurementPanel: React.FC = () => {
 
   // Handlers for new buttons
   const handleDownloadGraphsPng = async () => {
-    // Placeholder: will implement PNG export for both graphs
-    alert('Download Graphs as PNG coming soon!');
+    if (!liveGraphRef.current || !deltaGraphRef.current) {
+      alert('Graphs are not rendered yet.');
+      return;
+    }
+    const liveCanvas = await html2canvas(liveGraphRef.current, { backgroundColor: null });
+    const deltaCanvas = await html2canvas(deltaGraphRef.current, { backgroundColor: null });
+    liveCanvas.toBlob(blob => {
+      if (blob) saveAs(blob, 'live_graph.png');
+    });
+    deltaCanvas.toBlob(blob => {
+      if (blob) saveAs(blob, 'temf_vs_delta_temp.png');
+    });
   };
 
   const handleDownloadExcelWithGraph = async () => {
-    // Placeholder: will implement Excel export with embedded Live Graph
-    alert('Download data sheet (Excel with graph) coming soon!');
+    if (!liveGraphRef.current) {
+      alert('Live Graph is not rendered yet.');
+      return;
+    }
+    const canvas = await html2canvas(liveGraphRef.current, { backgroundColor: null });
+    const imgData = canvas.toDataURL('image/png');
+    const workbook = new ExcelJS.Workbook();
+    const sheet = workbook.addWorksheet('Data');
+    // Add header
+    sheet.addRow(["Time [s]", "TEMF [mV]", "Temp1 [oC]", "Temp2 [oC]", "Delta Temp (Δt) / 差温度 [°C]"]);
+    // Add data
+    data.forEach(row => {
+      sheet.addRow([
+        row["Time [s]"],
+        row["TEMF [mV]"],
+        row["Temp1 [oC]"],
+        row["Temp2 [oC]"],
+        row["Delta Temp [oC]"]
+      ]);
+    });
+    // Add image
+    const imageId = workbook.addImage({ base64: imgData, extension: 'png' });
+    // Place image below the data (row count + 2)
+    const imgRow = data.length + 3;
+    sheet.addImage(imageId, {
+      tl: { col: 0, row: imgRow },
+      ext: { width: 600, height: 300 }
+    });
+    // Save
+    const buffer = await workbook.xlsx.writeBuffer();
+    saveAs(new Blob([buffer]), 'data_sheet.xlsx');
   };
 
   return (
@@ -163,7 +204,7 @@ const SeebeckMeasurementPanel: React.FC = () => {
             <Typography variant="h6" gutterBottom>
               Live Graph / ライブグラフ
             </Typography>
-            <Box sx={{ height: 250, mb: 2 }}>
+            <Box sx={{ height: 250, mb: 2 }} ref={liveGraphRef}>
               <ResponsiveContainer width="100%" height="100%">
                 <LineChart data={data} margin={{ top: 10, right: 30, left: 0, bottom: 0 }}>
                   <CartesianGrid strokeDasharray="3 3" />
@@ -181,9 +222,9 @@ const SeebeckMeasurementPanel: React.FC = () => {
             <Typography variant="h6" gutterBottom>
               TEMF vs Delta Temp (Δt) / TEMF vs 差温度
             </Typography>
-            <Box sx={{ height: 250 }}>
+            <Box sx={{ height: 250 }} ref={deltaGraphRef}>
               <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={data} margin={{ top: 10, right: 30, left: 0, bottom: 0 }}>
+                <LineChart data={data} margin={{ top: 10, right: 40, left: 40, bottom: 30 }}>
                   <CartesianGrid strokeDasharray="3 3" />
                   <XAxis dataKey="Delta Temp [oC]" label={{ value: 'Delta Temp (Δt) / 差温度 [°C]', position: 'insideBottom', offset: -5 }} />
                   <YAxis label={{ value: 'TEMF [mV]', angle: -90, position: 'insideLeft' }} />
