@@ -94,7 +94,7 @@ class MeasurementSessionManager:
                     "TEMF [mV]": result["TEMF_mV"],
                     "Temp1 [oC]": result["Temp1_C"],
                     "Temp2 [oC]": result["Temp2_C"],
-                    "Delta Temp [oC]": (result["Temp2_C"] if result["Temp2_C"] is not None else 0) - (result["Temp1_C"] if result["Temp1_C"] is not None else 0)
+                    "Delta Temp [oC]": (result["Temp1_C"] if result["Temp1_C"] is not None else 0) - (result["Temp2_C"] if result["Temp2_C"] is not None else 0)
                 }
                 with self.lock:
                     self.session_data.append(row)
