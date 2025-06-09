@@ -101,10 +101,11 @@ const SeebeckMeasurementPanel: React.FC = () => {
         Seebeck Measurement (Web)
       </Typography>
       <Grid container spacing={3}>
+        {/* 1st column: Measurement parameters diagram */}
         <Grid item xs={12} md={4}>
           <Paper sx={{ p: 2 }}>
             <Typography variant="h6" gutterBottom>
-              Measurement Parameters
+              Measurement Parameters / 測定パラメータ
             </Typography>
             <MeasurementDiagramForm
               interval={interval} setIntervalVal={setIntervalVal}
@@ -118,27 +119,28 @@ const SeebeckMeasurementPanel: React.FC = () => {
             />
             <Box sx={{ display: 'flex', gap: 1, mt: 2 }}>
               <Button variant="contained" color="primary" onClick={handleStart} disabled={running || loading}>
-                Start Measurement
+                Start Measurement / 始める
               </Button>
               <Button variant="outlined" color="secondary" onClick={handleStop} disabled={!running}>
-                Stop Measurement
+                Stop Measurement / 停止
               </Button>
             </Box>
             <Box sx={{ mt: 2 }}>
               <CSVLink data={data} filename={fileName} style={{ textDecoration: 'none' }}>
-                <Button variant="outlined" disabled={data.length === 0}>Download CSV</Button>
+                <Button variant="outlined" disabled={data.length === 0}>Download CSV / CSVダウンロード</Button>
               </CSVLink>
             </Box>
             {error && <Alert severity="error" sx={{ mt: 2 }}>{error}</Alert>}
             {status && status.status && <Alert severity="info" sx={{ mt: 2 }}>Status: {status.status}</Alert>}
           </Paper>
         </Grid>
-        <Grid item xs={12} md={8}>
+        {/* 2nd column: Graphs */}
+        <Grid item xs={12} md={4}>
           <Paper sx={{ p: 2 }}>
             <Typography variant="h6" gutterBottom>
-              Live Graph
+              Live Graph / ライブグラフ
             </Typography>
-            <Box sx={{ height: 300, mb: 2 }}>
+            <Box sx={{ height: 250, mb: 2 }}>
               <ResponsiveContainer width="100%" height="100%">
                 <LineChart data={data} margin={{ top: 10, right: 30, left: 0, bottom: 0 }}>
                   <CartesianGrid strokeDasharray="3 3" />
@@ -154,13 +156,13 @@ const SeebeckMeasurementPanel: React.FC = () => {
               </ResponsiveContainer>
             </Box>
             <Typography variant="h6" gutterBottom>
-              TEMF vs Delta Temp
+              TEMF vs Delta Temp (Δt) / TEMF vs 差温度
             </Typography>
-            <Box sx={{ height: 300, mb: 2 }}>
+            <Box sx={{ height: 250, mb: 2 }}>
               <ResponsiveContainer width="100%" height="100%">
                 <LineChart data={data} margin={{ top: 10, right: 30, left: 0, bottom: 0 }}>
                   <CartesianGrid strokeDasharray="3 3" />
-                  <XAxis dataKey="Delta Temp [oC]" label={{ value: 'Delta Temp [°C]', position: 'insideBottom', offset: -5 }} />
+                  <XAxis dataKey="Delta Temp [oC]" label={{ value: 'Delta Temp (Δt) / 差温度 [°C]', position: 'insideBottom', offset: -5 }} />
                   <YAxis label={{ value: 'TEMF [mV]', angle: -90, position: 'insideLeft' }} />
                   <Tooltip />
                   <Legend />
@@ -168,8 +170,14 @@ const SeebeckMeasurementPanel: React.FC = () => {
                 </LineChart>
               </ResponsiveContainer>
             </Box>
+            {loading && <CircularProgress sx={{ mt: 2 }} />}
+          </Paper>
+        </Grid>
+        {/* 3rd column: Data Table */}
+        <Grid item xs={12} md={4}>
+          <Paper sx={{ p: 2 }}>
             <Typography variant="h6" gutterBottom>
-              Data Table
+              Data Table / データ表
             </Typography>
             <TableContainer>
               <Table size="small">
@@ -179,7 +187,7 @@ const SeebeckMeasurementPanel: React.FC = () => {
                     <TableCell>TEMF [mV]</TableCell>
                     <TableCell>Temp1 [°C]</TableCell>
                     <TableCell>Temp2 [°C]</TableCell>
-                    <TableCell>Delta Temp [°C]</TableCell>
+                    <TableCell>Delta Temp (Δt) / 差温度 [°C]</TableCell>
                   </TableRow>
                 </TableHead>
                 <TableBody>
@@ -195,7 +203,6 @@ const SeebeckMeasurementPanel: React.FC = () => {
                 </TableBody>
               </Table>
             </TableContainer>
-            {loading && <CircularProgress sx={{ mt: 2 }} />}
           </Paper>
         </Grid>
       </Grid>
