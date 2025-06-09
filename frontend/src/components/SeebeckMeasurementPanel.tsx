@@ -22,6 +22,16 @@ interface DataRow {
 
 const API_BASE_URL = 'http://localhost:8080/api/seebeck';
 
+// Engineering notation formatter for axis
+function engFormat(val: number): string {
+  if (val === 0) return '0';
+  const abs = Math.abs(val);
+  if (abs < 1e-6) return (val * 1e9).toPrecision(3) + ' n';
+  if (abs < 1e-3) return (val * 1e6).toPrecision(3) + ' μ';
+  if (abs < 1) return (val * 1e3).toPrecision(3) + ' m';
+  return val.toPrecision(3);
+}
+
 const SeebeckMeasurementPanel: React.FC = () => {
   const [interval, setIntervalVal] = useState(2);
   const [preTime, setPreTime] = useState(1);
@@ -229,8 +239,9 @@ const SeebeckMeasurementPanel: React.FC = () => {
                   <XAxis
                     dataKey="Delta Temp [oC]"
                     label={{ value: 'Delta Temp (Δt) / 差温度 [°C]', position: 'insideBottom', offset: -5 }}
-                    tickFormatter={(v) => v?.toFixed ? v.toFixed(2) : v}
-                    tick={{ angle: -30, fontSize: 12 }}
+                    tickFormatter={engFormat}
+                    tick={{ fontSize: 12 }}
+                    angle={-30}
                     tickCount={8}
                   />
                   <YAxis label={{ value: 'TEMF [mV]', angle: -90, position: 'insideLeft' }} />
