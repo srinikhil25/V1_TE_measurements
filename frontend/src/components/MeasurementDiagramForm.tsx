@@ -1,6 +1,16 @@
 import React from 'react';
 import { TextField, Box } from '@mui/material';
 
+// Make these available everywhere in the file
+const FONT = 'Arial Narrow, Arial, sans-serif';
+const inputStyle = {
+  background: '#ffff99',
+  fontSize: 18,
+  padding: 0,
+  width: 38,
+  height: 28,
+};
+
 interface MeasurementDiagramFormProps {
   interval: number;
   setIntervalVal: (v: number) => void;
@@ -32,6 +42,18 @@ const MeasurementDiagramForm: React.FC<MeasurementDiagramFormProps> = ({
 }) => {
   return (
     <Box sx={{ width: 500, mx: 'auto', mb: 3 }}>
+      {/* Move Measurement Interval label and input above the diagram, centered */}
+      <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', mb: 1 }}>
+        <span style={{ fontSize: 16, fontFamily: FONT, marginRight: 8 }}>Measurement Interval</span>
+        <TextField
+          value={interval}
+          onChange={e => setIntervalVal(Number(e.target.value))}
+          variant="outlined"
+          size="small"
+          inputProps={{ style: { background: '#ffff99', textAlign: 'center', width: 32 } }}
+        />
+        <span style={{ fontSize: 14, marginLeft: 4 }}>s</span>
+      </Box>
       <svg width={500} height={340}>
         {/* Main box */}
         <rect x={10} y={40} width={480} height={200} fill="#fff" stroke="#000" strokeWidth={1} />
@@ -53,18 +75,6 @@ const MeasurementDiagramForm: React.FC<MeasurementDiagramFormProps> = ({
         <polyline points="400,120 460,200" fill="none" stroke="#d32f2f" strokeWidth={2} />
         {/* Hold time arrow */}
         <line x1={340} y1={110} x2={390} y2={110} stroke="#d32f2f" strokeWidth={2} markerEnd="url(#arrow)" />
-        {/* Measurement Interval label and box */}
-        <text x={140} y={60} fontSize={16}>Measurement Interval</text>
-        <foreignObject x={270} y={40} width={40} height={28}>
-          <TextField
-            value={interval}
-            onChange={e => setIntervalVal(Number(e.target.value))}
-            variant="outlined"
-            size="small"
-            inputProps={{ style: { background: '#ffff99', textAlign: 'center', width: 32 } }}
-          />
-        </foreignObject>
-        <text x={315} y={60} fontSize={14}>s</text>
         {/* Pre time label and box */}
         <text x={80} y={215} fontSize={14}>t<sub>Pre</sub></text>
         <foreignObject x={110} y={205} width={32} height={28}>
@@ -135,17 +145,6 @@ const MeasurementDiagramForm: React.FC<MeasurementDiagramFormProps> = ({
           />
         </foreignObject>
         <text x={370} y={180} fontSize={14}>mA/s</text>
-        {/* File Name label and box */}
-        <text x={120} y={300} fontSize={14}>File Name</text>
-        <foreignObject x={180} y={285} width={140} height={28}>
-          <TextField
-            value={fileName}
-            onChange={e => setFileName(e.target.value)}
-            variant="outlined"
-            size="small"
-            inputProps={{ style: { background: '#ffff99', textAlign: 'center', width: 120 } }}
-          />
-        </foreignObject>
         {/* SVG arrow marker */}
         <defs>
           <marker id="arrow" markerWidth="10" markerHeight="10" refX="10" refY="5" orient="auto" markerUnits="strokeWidth">
@@ -153,6 +152,17 @@ const MeasurementDiagramForm: React.FC<MeasurementDiagramFormProps> = ({
           </marker>
         </defs>
       </svg>
+      {/* File Name label and input below the SVG, closer to the diagram */}
+      <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', mt: 0.5 }}>
+        <span style={{ fontSize: 18, fontFamily: FONT, marginRight: 24 }}>File Name</span>
+        <TextField
+          value={fileName}
+          onChange={e => setFileName(e.target.value)}
+          variant="outlined"
+          size="small"
+          inputProps={{ style: { ...inputStyle, width: 200, fontSize: 18, padding: 0 } }}
+        />
+      </Box>
     </Box>
   );
 };
