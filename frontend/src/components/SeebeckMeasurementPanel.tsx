@@ -8,6 +8,9 @@ import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer
 } from 'recharts';
 import MeasurementDiagramForm from './MeasurementDiagramForm';
+import html2canvas from 'html2canvas';
+import ExcelJS from 'exceljs';
+import { saveAs } from 'file-saver';
 
 interface DataRow {
   "Time [s]": number;
@@ -102,6 +105,17 @@ const SeebeckMeasurementPanel: React.FC = () => {
     }
   };
 
+  // Handlers for new buttons
+  const handleDownloadGraphsPng = async () => {
+    // Placeholder: will implement PNG export for both graphs
+    alert('Download Graphs as PNG coming soon!');
+  };
+
+  const handleDownloadExcelWithGraph = async () => {
+    // Placeholder: will implement Excel export with embedded Live Graph
+    alert('Download data sheet (Excel with graph) coming soon!');
+  };
+
   return (
     <Box sx={{ width: '100%' }}>
       {/* Top: Diagram and Controls (full width) */}
@@ -119,18 +133,24 @@ const SeebeckMeasurementPanel: React.FC = () => {
           holdTime={holdTime} setHoldTime={setHoldTime}
           fileName={fileName} setFileName={setFileName}
         />
-        <Box sx={{ display: 'flex', gap: 1, mt: 2 }}>
+        <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1, mt: 2 }}>
           <Button variant="contained" color="primary" onClick={handleStart} disabled={running || loading}>
             Start Measurement / 始める
           </Button>
           <Button variant="outlined" color="secondary" onClick={handleStop} disabled={!running}>
             Stop Measurement / 停止
           </Button>
-        </Box>
-        <Box sx={{ mt: 2 }}>
+          {/*
           <CSVLink data={data} filename={fileName} style={{ textDecoration: 'none' }}>
             <Button variant="outlined" disabled={data.length === 0}>Download CSV / CSVダウンロード</Button>
           </CSVLink>
+          */}
+          <Button variant="outlined" onClick={handleDownloadGraphsPng} disabled={data.length === 0}>
+            Download Graphs as PNG / グラフPNGダウンロード
+          </Button>
+          <Button variant="outlined" onClick={handleDownloadExcelWithGraph} disabled={data.length === 0}>
+            Download data sheet / データシートダウンロード
+          </Button>
         </Box>
         {error && <Alert severity="error" sx={{ mt: 2 }}>{error}</Alert>}
         {status && status.status && <Alert severity="info" sx={{ mt: 2 }}>Status: {status.status}</Alert>}
