@@ -2,7 +2,6 @@ import React, { useState, useRef, useEffect } from 'react';
 import {
   Box, Paper, Typography, Button, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, CircularProgress, Alert
 } from '@mui/material';
-import Grid from '@mui/material/Grid';
 import { CSVLink } from 'react-csv';
 import axios from 'axios';
 import {
@@ -35,6 +34,7 @@ const SeebeckMeasurementPanel: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [status, setStatus] = useState<any>(null);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const tableContainerRef = useRef<HTMLDivElement>(null);
 
   // Poll session status and data
   useEffect(() => {
@@ -60,6 +60,13 @@ const SeebeckMeasurementPanel: React.FC = () => {
       return () => { if (timerRef.current) clearInterval(timerRef.current); };
     }
   }, [running]);
+
+  // Auto-scroll to bottom of table when data changes
+  useEffect(() => {
+    if (tableContainerRef.current) {
+      tableContainerRef.current.scrollTop = tableContainerRef.current.scrollHeight;
+    }
+  }, [data]);
 
   const handleStart = async () => {
     setError(null);
@@ -96,47 +103,43 @@ const SeebeckMeasurementPanel: React.FC = () => {
   };
 
   return (
-    <Box>
-      <Typography variant="h4" gutterBottom>
-        Seebeck Measurement (Web)
-      </Typography>
-      <Grid container spacing={3}>
-        {/* 1st column: Measurement parameters diagram */}
-        <Grid item xs={12} md={4}>
-          <Paper sx={{ p: 2 }}>
-            <Typography variant="h6" gutterBottom>
-              Measurement Parameters / 測定パラメータ
-            </Typography>
-            <MeasurementDiagramForm
-              interval={interval} setIntervalVal={setIntervalVal}
-              preTime={preTime} setPreTime={setPreTime}
-              startVolt={startVolt} setStartVolt={setStartVolt}
-              stopVolt={stopVolt} setStopVolt={setStopVolt}
-              incRate={incRate} setIncRate={setIncRate}
-              decRate={decRate} setDecRate={setDecRate}
-              holdTime={holdTime} setHoldTime={setHoldTime}
-              fileName={fileName} setFileName={setFileName}
-            />
-            <Box sx={{ display: 'flex', gap: 1, mt: 2 }}>
-              <Button variant="contained" color="primary" onClick={handleStart} disabled={running || loading}>
-                Start Measurement / 始める
-              </Button>
-              <Button variant="outlined" color="secondary" onClick={handleStop} disabled={!running}>
-                Stop Measurement / 停止
-              </Button>
-            </Box>
-            <Box sx={{ mt: 2 }}>
-              <CSVLink data={data} filename={fileName} style={{ textDecoration: 'none' }}>
-                <Button variant="outlined" disabled={data.length === 0}>Download CSV / CSVダウンロード</Button>
-              </CSVLink>
-            </Box>
-            {error && <Alert severity="error" sx={{ mt: 2 }}>{error}</Alert>}
-            {status && status.status && <Alert severity="info" sx={{ mt: 2 }}>Status: {status.status}</Alert>}
-          </Paper>
-        </Grid>
-        {/* 2nd column: Graphs */}
-        <Grid item xs={12} md={4}>
-          <Paper sx={{ p: 2 }}>
+    <Box sx={{ width: '100%' }}>
+      {/* Top: Diagram and Controls (full width) */}
+      <Paper sx={{ p: 2, mb: 2 }}>
+        <Typography variant="h6" gutterBottom>
+          Measurement Parameters / 測定パラメータ
+        </Typography>
+        <MeasurementDiagramForm
+          interval={interval} setIntervalVal={setIntervalVal}
+          preTime={preTime} setPreTime={setPreTime}
+          startVolt={startVolt} setStartVolt={setStartVolt}
+          stopVolt={stopVolt} setStopVolt={setStopVolt}
+          incRate={incRate} setIncRate={setIncRate}
+          decRate={decRate} setDecRate={setDecRate}
+          holdTime={holdTime} setHoldTime={setHoldTime}
+          fileName={fileName} setFileName={setFileName}
+        />
+        <Box sx={{ display: 'flex', gap: 1, mt: 2 }}>
+          <Button variant="contained" color="primary" onClick={handleStart} disabled={running || loading}>
+            Start Measurement / 始める
+          </Button>
+          <Button variant="outlined" color="secondary" onClick={handleStop} disabled={!running}>
+            Stop Measurement / 停止
+          </Button>
+        </Box>
+        <Box sx={{ mt: 2 }}>
+          <CSVLink data={data} filename={fileName} style={{ textDecoration: 'none' }}>
+            <Button variant="outlined" disabled={data.length === 0}>Download CSV / CSVダウンロード</Button>
+          </CSVLink>
+        </Box>
+        {error && <Alert severity="error" sx={{ mt: 2 }}>{error}</Alert>}
+        {status && status.status && <Alert severity="info" sx={{ mt: 2 }}>Status: {status.status}</Alert>}
+      </Paper>
+      {/* Bottom: Graphs and Data Table side by side */}
+      <Box sx={{ display: 'flex', flexDirection: { xs: 'column', md: 'row' }, gap: 2, width: '100%' }}>
+        {/* Left: Graphs */}
+        <Box sx={{ flex: 1, minWidth: 350, display: 'flex', flexDirection: 'column', gap: 2 }}>
+          <Paper sx={{ p: 2, flex: 1, minHeight: 300, display: 'flex', flexDirection: 'column' }}>
             <Typography variant="h6" gutterBottom>
               Live Graph / ライブグラフ
             </Typography>
@@ -158,7 +161,7 @@ const SeebeckMeasurementPanel: React.FC = () => {
             <Typography variant="h6" gutterBottom>
               TEMF vs Delta Temp (Δt) / TEMF vs 差温度
             </Typography>
-            <Box sx={{ height: 250, mb: 2 }}>
+            <Box sx={{ height: 250 }}>
               <ResponsiveContainer width="100%" height="100%">
                 <LineChart data={data} margin={{ top: 10, right: 30, left: 0, bottom: 0 }}>
                   <CartesianGrid strokeDasharray="3 3" />
@@ -172,15 +175,15 @@ const SeebeckMeasurementPanel: React.FC = () => {
             </Box>
             {loading && <CircularProgress sx={{ mt: 2 }} />}
           </Paper>
-        </Grid>
-        {/* 3rd column: Data Table */}
-        <Grid item xs={12} md={4}>
-          <Paper sx={{ p: 2 }}>
+        </Box>
+        {/* Right: Data Table */}
+        <Box sx={{ minWidth: 520, flex: '0 0 520px', mb: { xs: 2, md: 0 } }}>
+          <Paper sx={{ p: 2, height: '100%', display: 'flex', flexDirection: 'column' }}>
             <Typography variant="h6" gutterBottom>
               Data Table / データ表
             </Typography>
-            <TableContainer>
-              <Table size="small">
+            <TableContainer ref={tableContainerRef} sx={{ maxHeight: 600, overflowY: 'auto', overflowX: 'hidden' }}>
+              <Table size="small" stickyHeader>
                 <TableHead>
                   <TableRow>
                     <TableCell>Time [s]</TableCell>
@@ -204,8 +207,8 @@ const SeebeckMeasurementPanel: React.FC = () => {
               </Table>
             </TableContainer>
           </Paper>
-        </Grid>
-      </Grid>
+        </Box>
+      </Box>
     </Box>
   );
 };
