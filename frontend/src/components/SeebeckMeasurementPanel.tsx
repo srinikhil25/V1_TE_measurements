@@ -15,6 +15,7 @@ interface DataRow {
   "TEMF [mV]": number;
   "Temp1 [oC]": number;
   "Temp2 [oC]": number;
+  "Delta Temp [oC]": number;
 }
 
 const API_BASE_URL = 'http://localhost:8080/api/seebeck';
@@ -153,6 +154,21 @@ const SeebeckMeasurementPanel: React.FC = () => {
               </ResponsiveContainer>
             </Box>
             <Typography variant="h6" gutterBottom>
+              TEMF vs Delta Temp
+            </Typography>
+            <Box sx={{ height: 300, mb: 2 }}>
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart data={data} margin={{ top: 10, right: 30, left: 0, bottom: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" />
+                  <XAxis dataKey="Delta Temp [oC]" label={{ value: 'Delta Temp [°C]', position: 'insideBottom', offset: -5 }} />
+                  <YAxis label={{ value: 'TEMF [mV]', angle: -90, position: 'insideLeft' }} />
+                  <Tooltip />
+                  <Legend />
+                  <Line type="monotone" dataKey="TEMF [mV]" stroke="#1976d2" dot={true} name="TEMF [mV]" />
+                </LineChart>
+              </ResponsiveContainer>
+            </Box>
+            <Typography variant="h6" gutterBottom>
               Data Table
             </Typography>
             <TableContainer>
@@ -163,6 +179,7 @@ const SeebeckMeasurementPanel: React.FC = () => {
                     <TableCell>TEMF [mV]</TableCell>
                     <TableCell>Temp1 [°C]</TableCell>
                     <TableCell>Temp2 [°C]</TableCell>
+                    <TableCell>Delta Temp [°C]</TableCell>
                   </TableRow>
                 </TableHead>
                 <TableBody>
@@ -172,6 +189,7 @@ const SeebeckMeasurementPanel: React.FC = () => {
                       <TableCell>{row["TEMF [mV]"]?.toFixed(3)}</TableCell>
                       <TableCell>{row["Temp1 [oC]"]?.toFixed(2)}</TableCell>
                       <TableCell>{row["Temp2 [oC]"]?.toFixed(2)}</TableCell>
+                      <TableCell>{row["Delta Temp [oC]"]?.toFixed(2)}</TableCell>
                     </TableRow>
                   ))}
                 </TableBody>
