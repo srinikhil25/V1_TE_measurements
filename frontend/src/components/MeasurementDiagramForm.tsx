@@ -88,8 +88,8 @@ const MeasurementDiagramForm: React.FC<MeasurementDiagramFormProps> = ({
             inputProps={{ style: { background: '#ffff99', textAlign: 'center', width: 28 } }}
           />
         </foreignObject>
-        {/* Stop value label and box */}
-        <foreignObject x={440} y={110} width={32} height={28}>
+        {/* Top-left y-axis value box and label (moved here) */}
+        <foreignObject x={30} y={60} width={32} height={28}>
           <TextField
             value={stopVolt}
             onChange={e => setStopVolt(Number(e.target.value))}
@@ -98,7 +98,7 @@ const MeasurementDiagramForm: React.FC<MeasurementDiagramFormProps> = ({
             inputProps={{ style: { background: '#ffff99', textAlign: 'center', width: 28 } }}
           />
         </foreignObject>
-        <text x={475} y={130} fontSize={14}>I</text>
+        <text x={65} y={75} fontSize={14}>I</text>
         {/* Hold time label and box */}
         <text x={350} y={100} fontSize={14}>t<sub>Hold</sub></text>
         <foreignObject x={370} y={80} width={48} height={28}>
