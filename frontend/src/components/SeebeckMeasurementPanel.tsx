@@ -1,12 +1,14 @@
 import React, { useState, useRef, useEffect } from 'react';
 import {
-  Box, Paper, Typography, Button, Grid, TextField, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, CircularProgress, Alert
+  Box, Paper, Typography, Button, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, CircularProgress, Alert
 } from '@mui/material';
+import Grid from '@mui/material/Grid';
 import { CSVLink } from 'react-csv';
 import axios from 'axios';
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer
 } from 'recharts';
+import MeasurementDiagramForm from './MeasurementDiagramForm';
 
 interface DataRow {
   "Time [s]": number;
@@ -103,14 +105,16 @@ const SeebeckMeasurementPanel: React.FC = () => {
             <Typography variant="h6" gutterBottom>
               Measurement Parameters
             </Typography>
-            <TextField label="Measurement Interval (s)" type="number" value={interval} onChange={e => setIntervalVal(Number(e.target.value))} fullWidth margin="normal" />
-            <TextField label="Pre Time (s)" type="number" value={preTime} onChange={e => setPreTime(Number(e.target.value))} fullWidth margin="normal" />
-            <TextField label="Start Value" type="number" value={startVolt} onChange={e => setStartVolt(Number(e.target.value))} fullWidth margin="normal" />
-            <TextField label="Stop Value" type="number" value={stopVolt} onChange={e => setStopVolt(Number(e.target.value))} fullWidth margin="normal" />
-            <TextField label="Inc. Rate (mA/s)" type="number" value={incRate} onChange={e => setIncRate(Number(e.target.value))} fullWidth margin="normal" />
-            <TextField label="Dec. Rate (mA/s)" type="number" value={decRate} onChange={e => setDecRate(Number(e.target.value))} fullWidth margin="normal" />
-            <TextField label="Hold Time (s)" type="number" value={holdTime} onChange={e => setHoldTime(Number(e.target.value))} fullWidth margin="normal" />
-            <TextField label="File Name" value={fileName} onChange={e => setFileName(e.target.value)} fullWidth margin="normal" />
+            <MeasurementDiagramForm
+              interval={interval} setIntervalVal={setIntervalVal}
+              preTime={preTime} setPreTime={setPreTime}
+              startVolt={startVolt} setStartVolt={setStartVolt}
+              stopVolt={stopVolt} setStopVolt={setStopVolt}
+              incRate={incRate} setIncRate={setIncRate}
+              decRate={decRate} setDecRate={setDecRate}
+              holdTime={holdTime} setHoldTime={setHoldTime}
+              fileName={fileName} setFileName={setFileName}
+            />
             <Box sx={{ display: 'flex', gap: 1, mt: 2 }}>
               <Button variant="contained" color="primary" onClick={handleStart} disabled={running || loading}>
                 Start Measurement
