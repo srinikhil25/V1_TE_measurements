@@ -1,7 +1,7 @@
 import { ThemeProvider, createTheme, CssBaseline, Box, Container, IconButton } from '@mui/material';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import SeebeckMeasurementPanel from './components/SeebeckMeasurementPanel';
-import React, { useMemo, useState, useEffect } from 'react';
+import { useMemo, useState, useEffect } from 'react';
 import Brightness4Icon from '@mui/icons-material/Brightness4';
 import Brightness7Icon from '@mui/icons-material/Brightness7';
 

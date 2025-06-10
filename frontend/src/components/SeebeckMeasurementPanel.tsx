@@ -2,7 +2,6 @@ import React, { useState, useRef, useEffect } from 'react';
 import {
   Box, Paper, Typography, Button, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, CircularProgress, Alert
 } from '@mui/material';
-import { CSVLink } from 'react-csv';
 import axios from 'axios';
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer
@@ -20,7 +19,7 @@ interface DataRow {
   "Delta Temp [oC]": number;
 }
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8080/api/seebeck';
+const API_BASE_URL = `${import.meta.env.VITE_API_BASE_URL}/api/seebeck` || 'http://localhost:8080/api/seebeck';
 
 // Engineering notation formatter for axis
 function engFormat(val: number): string {
@@ -145,7 +144,8 @@ const SeebeckMeasurementPanel: React.FC = () => {
     // Add header
     sheet.addRow(["Time [s]", "TEMF [mV]", "Temp1 [oC]", "Temp2 [oC]", "Delta Temp (Δt) / 差温度 [°C]"]);
     // Add data
-    data.forEach(row => {
+    const safeData = Array.isArray(data) ? data : [];
+    safeData.forEach(row => {
       sheet.addRow([
         row["Time [s]"],
         row["TEMF [mV]"],
@@ -157,7 +157,7 @@ const SeebeckMeasurementPanel: React.FC = () => {
     // Add image
     const imageId = workbook.addImage({ base64: imgData, extension: 'png' });
     // Place image below the data (row count + 2)
-    const imgRow = data.length + 3;
+    const imgRow = safeData.length + 3;
     sheet.addImage(imageId, {
       tl: { col: 0, row: imgRow },
       ext: { width: 600, height: 300 }
@@ -166,6 +166,9 @@ const SeebeckMeasurementPanel: React.FC = () => {
     const buffer = await workbook.xlsx.writeBuffer();
     saveAs(new Blob([buffer]), 'data_sheet.xlsx');
   };
+
+  // Defensive: ensure data is always an array
+  const safeData = Array.isArray(data) ? data : [];
 
   return (
     <Box sx={{ width: '100%' }}>
@@ -192,14 +195,14 @@ const SeebeckMeasurementPanel: React.FC = () => {
             Stop Measurement / 停止
           </Button>
           {/*
-          <CSVLink data={data} filename={fileName} style={{ textDecoration: 'none' }}>
-            <Button variant="outlined" disabled={data.length === 0}>Download CSV / CSVダウンロード</Button>
+          <CSVLink data={safeData} filename={fileName} style={{ textDecoration: 'none' }}>
+            <Button variant="outlined" disabled={safeData.length === 0}>Download CSV / CSVダウンロード</Button>
           </CSVLink>
           */}
-          <Button variant="outlined" onClick={handleDownloadGraphsPng} disabled={data.length === 0}>
+          <Button variant="outlined" onClick={handleDownloadGraphsPng} disabled={safeData.length === 0}>
             Download Graphs as PNG / グラフPNGダウンロード
           </Button>
-          <Button variant="outlined" onClick={handleDownloadExcelWithGraph} disabled={data.length === 0}>
+          <Button variant="outlined" onClick={handleDownloadExcelWithGraph} disabled={safeData.length === 0}>
             Download data sheet / データシートダウンロード
           </Button>
         </Box>
@@ -216,7 +219,7 @@ const SeebeckMeasurementPanel: React.FC = () => {
             </Typography>
             <Box sx={{ height: 250, mb: 2 }} ref={liveGraphRef}>
               <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={data} margin={{ top: 10, right: 30, left: 0, bottom: 0 }}>
+                <LineChart data={safeData} margin={{ top: 10, right: 30, left: 0, bottom: 0 }}>
                   <CartesianGrid strokeDasharray="3 3" />
                   <XAxis dataKey="Time [s]" />
                   <YAxis yAxisId="left" label={{ value: 'TEMF [mV]', angle: -90, position: 'insideLeft' }} />
@@ -234,7 +237,7 @@ const SeebeckMeasurementPanel: React.FC = () => {
             </Typography>
             <Box sx={{ height: 250 }} ref={deltaGraphRef}>
               <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={data} margin={{ top: 10, right: 40, left: 40, bottom: 40 }}>
+                <LineChart data={safeData} margin={{ top: 10, right: 40, left: 40, bottom: 40 }}>
                   <CartesianGrid strokeDasharray="3 3" />
                   <XAxis
                     dataKey="Delta Temp [oC]"
@@ -272,7 +275,7 @@ const SeebeckMeasurementPanel: React.FC = () => {
                   </TableRow>
                 </TableHead>
                 <TableBody>
-                  {data.map((row, idx) => (
+                  {safeData.map((row, idx) => (
                     <TableRow key={idx}>
                       <TableCell>{row["Time [s]"]}</TableCell>
                       <TableCell>{row["TEMF [mV]"]?.toFixed(3)}</TableCell>
