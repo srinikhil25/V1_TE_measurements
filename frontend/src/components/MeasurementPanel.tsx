@@ -21,7 +21,7 @@ import {
   ResponsiveContainer,
 } from 'recharts';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { instrumentApi, MeasurementData, MeasurementConfig } from '../api/client';
+import { instrumentApi, type MeasurementData, type MeasurementConfig } from '../api/client';
 
 const MeasurementPanel = () => {
   const queryClient = useQueryClient();

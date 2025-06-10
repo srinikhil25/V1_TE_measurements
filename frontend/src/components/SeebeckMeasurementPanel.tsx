@@ -20,7 +20,7 @@ interface DataRow {
   "Delta Temp [oC]": number;
 }
 
-const API_BASE_URL = 'http://localhost:8080/api/seebeck';
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8080/api/seebeck';
 
 // Engineering notation formatter for axis
 function engFormat(val: number): string {
