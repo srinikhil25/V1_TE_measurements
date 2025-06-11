@@ -19,7 +19,35 @@ interface DataRow {
   "Delta Temp [oC]": number;
 }
 
-const API_BASE_URL = `${import.meta.env.VITE_API_BASE_URL}/api/seebeck` || 'http://localhost:8080/api/seebeck';
+const API_BASE_URL = `${import.meta.env.VITE_API_BASE_URL || 'http://localhost:8080'}/api/seebeck`;
+
+// Create a custom axios instance for the API
+const api = axios.create({
+  baseURL: API_BASE_URL,
+  headers: {
+    'Content-Type': 'application/json',
+    'Accept': 'application/json',
+  },
+  withCredentials: false,
+  timeout: 10000,
+});
+
+// Add request interceptor to handle CORS preflight
+api.interceptors.request.use(
+  (config) => {
+    if (config.method === 'get') {
+      config.params = { ...config.params, _t: Date.now() };
+    }
+    // Ensure content type is set for POST requests
+    if (config.method === 'post') {
+      config.headers['Content-Type'] = 'application/json';
+    }
+    return config;
+  },
+  (error) => {
+    return Promise.reject(error);
+  }
+);
 
 // Engineering notation formatter for axis
 function engFormat(val: number): string {
@@ -55,17 +83,25 @@ const SeebeckMeasurementPanel: React.FC = () => {
     if (running) {
       timerRef.current = setInterval(async () => {
         try {
-          const statusResp = await axios.get(`${API_BASE_URL}/status`);
+          console.log('API_BASE_URL:', API_BASE_URL);
+          const statusResp = await api.get('/status');
           setStatus(statusResp.data);
-          const dataResp = await axios.get(`${API_BASE_URL}/data`);
-          setData(dataResp.data.data);
+          const dataResp = await api.get('/data');
+          console.log('Fetched data:', dataResp.data);
+          const arr = Array.isArray(dataResp.data) ? dataResp.data : dataResp.data.data;
+          setData(Array.isArray(arr) ? arr : []);
           if (statusResp.data.status === 'finished' || statusResp.data.status === 'stopped' || statusResp.data.status?.startsWith('error')) {
             setRunning(false);
             setLoading(false);
             if (timerRef.current) clearInterval(timerRef.current);
           }
         } catch (err: any) {
-          setError('Failed to fetch session status/data');
+          console.error('Error fetching data:', err);
+          if (err.response?.status === 0) {
+            setError('Network error or CORS issue. Please check your connection and try again.');
+          } else {
+            setError(err.message || 'Failed to fetch session status/data');
+          }
           setRunning(false);
           setLoading(false);
           if (timerRef.current) clearInterval(timerRef.current);
@@ -87,17 +123,38 @@ const SeebeckMeasurementPanel: React.FC = () => {
     setData([]);
     setLoading(true);
     try {
-      await axios.post(`${API_BASE_URL}/start`, {
-        interval,
+      const params = {
+        interval: interval,
         pre_time: preTime,
         start_volt: startVolt,
         stop_volt: stopVolt,
         inc_rate: incRate,
         dec_rate: decRate,
-        hold_time: holdTime,
+        hold_time: holdTime
+      };
+      
+      // Debug log
+      console.log('Sending params:', params);
+      
+      const response = await api.post('/start', params, {
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json'
+        }
       });
-      setRunning(true);
+      
+      console.log('Response:', response);
+      
+      if (response.data.status === 'started') {
+        setRunning(true);
+      } else {
+        setError('Failed to start measurement');
+        setLoading(false);
+      }
     } catch (err: any) {
+      console.error('Start error:', err);
+      console.error('Request config:', err.config);
+      console.error('Request data:', err.config?.data);
       setError(err.response?.data?.detail || 'Failed to start measurement');
       setLoading(false);
     }
@@ -107,7 +164,11 @@ const SeebeckMeasurementPanel: React.FC = () => {
     setLoading(true);
     setError(null);
     try {
-      await axios.post(`${API_BASE_URL}/stop`);
+      await api.post('/stop', {}, {
+        headers: {
+          'Content-Type': 'application/json',
+        }
+      });
       setRunning(false);
       setLoading(false);
     } catch (err: any) {
