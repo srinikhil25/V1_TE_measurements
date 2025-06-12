@@ -319,12 +319,12 @@ const SeebeckMeasurementPanel: React.FC = () => {
           </Paper>
         </Box>
         {/* Right: Data Table */}
-        <Box sx={{ minWidth: 520, flex: '0 0 520px', mb: { xs: 2, md: 0 } }}>
+        <Box sx={{ flex: 1, mb: { xs: 2, md: 0 } }}>
           <Paper sx={{ p: 2, height: '100%', display: 'flex', flexDirection: 'column' }}>
             <Typography variant="h6" gutterBottom>
               Data Table / データ表
             </Typography>
-            <TableContainer ref={tableContainerRef} sx={{ maxHeight: 600, overflowY: 'auto', overflowX: 'hidden' }}>
+            <TableContainer ref={tableContainerRef} sx={{ maxHeight: 600, overflowY: 'auto', width: '100%' }}>
               <Table size="small" stickyHeader>
                 <TableHead>
                   <TableRow>
