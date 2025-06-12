@@ -50,9 +50,9 @@ The backend is built with FastAPI.
 
 4.  **Run the FastAPI server:**
     ```bash
-    uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+    uvicorn app.main:app --reload --host 0.0.0.0 --port 8080
     ```
-    The backend API will be accessible at `http://localhost:8000/api/` (e.g., `http://localhost:8000/api/seebeck/start`). Keep this terminal window open.
+    The backend API will be accessible at `http://localhost:8080/api/` (e.g., `http://localhost:8080/api/seebeck/start`). Keep this terminal window open.
 
 ## Frontend Setup
 
@@ -73,7 +73,7 @@ The frontend is built with React and Vite.
 
     *   For **local development**, add this line:
         ```
-        VITE_API_BASE_URL=http://localhost:8000
+        VITE_API_BASE_URL=http://localhost:8080
         ```
     *   If you plan to use a **tunneling service (ngrok/Serveo)**, you will update this URL later with the tunnel's public address.
 
@@ -88,7 +88,7 @@ The frontend is built with React and Vite.
 ### Local Development
 
 1.  Follow the [Backend Setup](#backend-setup) steps and run the backend server.
-2.  Follow the [Frontend Setup](#frontend-setup) steps, ensuring your `frontend/.env` has `VITE_API_BASE_URL=http://localhost:8000`, and run the frontend server.
+2.  Follow the [Frontend Setup](#frontend-setup) steps, ensuring your `frontend/.env` has `VITE_API_BASE_URL=http://localhost:8080`, and run the frontend server.
 3.  Open `http://localhost:5173` in your browser.
 
 ### Using a Tunnel (ngrok or Serveo)
@@ -107,7 +107,7 @@ This is useful if you need to access your local application from another device,
     authtoken: your_auth_token_here
     tunnels:
       backend:
-        addr: 8000
+        addr: 8080
         proto: http
         schemes:
           - https
@@ -138,7 +138,7 @@ This is useful if you need to access your local application from another device,
 1.  **Start your backend server** (as per [Backend Setup](#backend-setup)).
 2.  **Start Serveo** in a new terminal. You need an SSH client for this.
     ```bash
-    ssh -R 80:localhost:8000 serveo.net
+    ssh -R 80:localhost:8080 serveo.net
     ```
     Serveo will provide a public HTTPS URL (e.g., `https://your-random-subdomain.serveo.net`). **Copy this URL.**
 3.  **Update your frontend's `.env` file:**
@@ -159,7 +159,7 @@ This is useful if you need to access your local application from another device,
 *   **`Network Error` / `ERR_CONNECTION_REFUSED`**:
     *   Ensure both your backend and tunneling service (if used) are running.
     *   Verify the `VITE_API_BASE_URL` in your frontend's `.env` matches the active URL of your backend or tunnel.
-    *   Check if firewalls are blocking ports (8000 for backend, 5173 for frontend).
+    *   Check if firewalls are blocking ports (8080 for backend, 5173 for frontend).
 *   **"Bad Request" from backend for OPTIONS requests**: This is usually handled by FastAPI's `CORSMiddleware`. If it persists, ensure your backend logs (from `uvicorn` terminal) are checked for more specific errors.
 
 If you encounter persistent issues, carefully review the console outputs from both your frontend and backend terminals, and check your browser's developer console for network requests and error messages. 
