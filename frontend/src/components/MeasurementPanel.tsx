@@ -4,7 +4,6 @@ import {
   Paper,
   Typography,
   Button,
-  Grid,
   TextField,
   Switch,
   FormControlLabel,
@@ -82,7 +81,7 @@ const MeasurementPanel = () => {
 
   // WebSocket connection for real-time updates
   useEffect(() => {
-    const ws = new WebSocket('ws://localhost:8000/api/instrument/ws');
+    const ws = new WebSocket('ws://localhost:8080/api/instrument/ws');
     
     ws.onmessage = (event) => {
       const data = JSON.parse(event.data);
@@ -111,9 +110,9 @@ const MeasurementPanel = () => {
         Seebeck Measurement System
       </Typography>
 
-      <Grid container spacing={3}>
+      <Box sx={{ display: 'flex', flexDirection: { xs: 'column', md: 'row' }, gap: 3 }}>
         {/* Status and Control Panel */}
-        <Grid item xs={12} md={4}>
+        <Box sx={{ width: { xs: '100%', md: '33%' } }}>
           <Paper sx={{ p: 2 }}>
             <Typography variant="h6" gutterBottom>
               Instrument Control
@@ -193,10 +192,10 @@ const MeasurementPanel = () => {
               </Button>
             </Box>
           </Paper>
-        </Grid>
+        </Box>
 
         {/* Measurement Panel */}
-        <Grid item xs={12} md={8}>
+        <Box sx={{ width: { xs: '100%', md: '67%' } }}>
           <Paper sx={{ p: 2 }}>
             <Typography variant="h6" gutterBottom>
               Measurements
@@ -244,8 +243,8 @@ const MeasurementPanel = () => {
               </Button>
             </Box>
           </Paper>
-        </Grid>
-      </Grid>
+        </Box>
+      </Box>
     </Box>
   );
 };
