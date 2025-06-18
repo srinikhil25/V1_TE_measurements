@@ -4,6 +4,7 @@ from fastapi.responses import JSONResponse
 import logging
 from .routers import instrument
 from .routers import seebeck
+from .routers import ir_camera
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -59,6 +60,7 @@ app.include_router(
     prefix="/api/seebeck",
     tags=["seebeck"]
 )
+app.include_router(ir_camera.router)
 
 @app.get("/")
 async def root():

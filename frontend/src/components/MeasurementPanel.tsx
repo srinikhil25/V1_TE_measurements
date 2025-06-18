@@ -22,6 +22,52 @@ import {
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { instrumentApi, type MeasurementData, type MeasurementConfig } from '../api/client';
 
+const IRStreamPanel = () => {
+  const [imgSrc, setImgSrc] = useState('');
+
+  useEffect(() => {
+    const ws = new WebSocket('ws://localhost:8080/api/ir_camera/ws');
+    ws.onmessage = (event) => {
+      setImgSrc('data:image/jpeg;base64,' + event.data);
+    };
+    ws.onerror = () => {
+      setImgSrc('');
+    };
+    return () => ws.close();
+  }, []);
+
+  return (
+    <Box sx={{ width: '100%', mb: 2 }}>
+      <Typography variant="h6" gutterBottom>
+        IR Camera Live Stream
+      </Typography>
+      {imgSrc ? (
+        <img
+          src={imgSrc}
+          alt="IR Camera Stream"
+          style={{ width: '100%', maxHeight: 400, objectFit: 'contain', borderRadius: 8, border: '1px solid #ccc' }}
+        />
+      ) : (
+        <Box
+          sx={{
+            width: '100%',
+            height: 400,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            border: '1px dashed #ccc',
+            borderRadius: 2,
+            color: '#888',
+            background: '#fafafa',
+          }}
+        >
+          No IR stream available
+        </Box>
+      )}
+    </Box>
+  );
+};
+
 const MeasurementPanel = () => {
   const queryClient = useQueryClient();
   const [config, setConfig] = useState<MeasurementConfig>({
@@ -243,6 +289,11 @@ const MeasurementPanel = () => {
               </Button>
             </Box>
           </Paper>
+        </Box>
+
+        {/* IR Camera Panel */}
+        <Box sx={{ width: { xs: '100%', md: '33%' } }}>
+          <IRStreamPanel />
         </Box>
       </Box>
     </Box>

@@ -59,6 +59,146 @@ function engFormat(val: number): string {
   return val.toPrecision(3);
 }
 
+const IRStreamPanel = () => {
+  const [imgSrc, setImgSrc] = useState('');
+  const [avgTemp, setAvgTemp] = useState('--');
+  const [minTemp, setMinTemp] = useState('--');
+  const [maxTemp, setMaxTemp] = useState('--');
+  const [temps, setTemps] = useState<number[][] | null>(null);
+  const [hoverTemp, setHoverTemp] = useState<string | null>(null);
+  const [tooltipPos, setTooltipPos] = useState<{x: number, y: number} | null>(null);
+  const wsRef = useRef<WebSocket | null>(null);
+  const imgRef = useRef<HTMLImageElement | null>(null);
+
+  useEffect(() => {
+    let ws: WebSocket | null = null;
+    let reconnectTimeout: number | null = null;
+
+    const connect = () => {
+      ws = new WebSocket('ws://localhost:8080/api/ir_camera/ws');
+      wsRef.current = ws;
+
+      ws.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          setImgSrc('data:image/jpeg;base64,' + data.image);
+          setAvgTemp(data.avg.toFixed(1));
+          setMinTemp(data.min.toFixed(1));
+          setMaxTemp(data.max.toFixed(1));
+          setTemps(data.temps);
+        } catch {
+          setImgSrc('data:image/jpeg;base64,' + event.data);
+        }
+      };
+      ws.onerror = () => {
+        ws && ws.close();
+      };
+      ws.onclose = () => {
+        reconnectTimeout = window.setTimeout(connect, 1000);
+      };
+    };
+
+    connect();
+
+    return () => {
+      if (wsRef.current) wsRef.current.close();
+      if (reconnectTimeout) clearTimeout(reconnectTimeout);
+    };
+  }, []);
+
+  // Mouse move handler
+  const handleMouseMove = (e: React.MouseEvent<HTMLImageElement, MouseEvent>) => {
+    if (!imgRef.current || !temps) return;
+    const rect = imgRef.current.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+    // Map to original temperature array coordinates
+    const imgWidth = imgRef.current.width;
+    const imgHeight = imgRef.current.height;
+    const arrHeight = temps.length;
+    const arrWidth = temps[0]?.length || 0;
+    const arrX = Math.floor(x * arrWidth / imgWidth);
+    const arrY = Math.floor(y * arrHeight / imgHeight);
+    if (
+      arrX >= 0 && arrX < arrWidth &&
+      arrY >= 0 && arrY < arrHeight
+    ) {
+      setHoverTemp(`${temps[arrY][arrX].toFixed(1)}°C`);
+      setTooltipPos({ x, y });
+    } else {
+      setHoverTemp(null);
+      setTooltipPos(null);
+    }
+  };
+
+  const handleMouseLeave = () => {
+    setHoverTemp(null);
+    setTooltipPos(null);
+  };
+
+  return (
+    <Box sx={{ width: '100%', mb: 2, position: 'relative' }}>
+      <Typography variant="h6" gutterBottom>
+        IR Camera Live Stream
+      </Typography>
+      <Box sx={{ position: 'relative', width: '100%' }}>
+        {imgSrc ? (
+          <img
+            ref={imgRef}
+            src={imgSrc}
+            alt="IR Camera Stream"
+            style={{ width: '100%', maxHeight: 420, objectFit: 'contain', borderRadius: 8, border: '1px solid #ccc', display: 'block' }}
+            onMouseMove={handleMouseMove}
+            onMouseLeave={handleMouseLeave}
+          />
+        ) : (
+          <Box
+            sx={{
+              width: '100%',
+              height: 420,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              border: '1px dashed #ccc',
+              borderRadius: 2,
+              color: '#888',
+              background: '#fafafa',
+            }}
+          >
+            No IR stream available
+          </Box>
+        )}
+        {/* Tooltip */}
+        {hoverTemp && tooltipPos && (
+          <Box
+            sx={{
+              position: 'absolute',
+              left: tooltipPos.x,
+              top: tooltipPos.y,
+              transform: 'translate(-50%, -120%)',
+              pointerEvents: 'none',
+              bgcolor: 'rgba(0,0,0,0.75)',
+              color: '#fff',
+              px: 1.2,
+              py: 0.5,
+              borderRadius: 1,
+              fontSize: 15,
+              zIndex: 10,
+              whiteSpace: 'nowrap',
+            }}
+          >
+            {hoverTemp}
+          </Box>
+        )}
+      </Box>
+      {/* Temperature stats below the image */}
+      <Box sx={{ mt: 1, textAlign: 'center', fontSize: 16, color: '#444' }}>
+        Avg: {avgTemp}°C &nbsp;|&nbsp; Min: {minTemp}°C &nbsp;|&nbsp; Max: {maxTemp}°C
+      </Box>
+    </Box>
+  );
+};
+
 const SeebeckMeasurementPanel: React.FC = () => {
   const [interval, setIntervalVal] = useState(2);
   const [preTime, setPreTime] = useState(1);
@@ -233,48 +373,59 @@ const SeebeckMeasurementPanel: React.FC = () => {
 
   return (
     <Box sx={{ width: '100%' }}>
-      {/* Top: Diagram and Controls (full width) */}
-      <Paper sx={{ p: 2, mb: 2 }}>
-        <Typography variant="h6" gutterBottom>
-          Measurement Parameters / 測定パラメータ
-        </Typography>
-        <MeasurementDiagramForm
-          interval={interval} setIntervalVal={setIntervalVal}
-          preTime={preTime} setPreTime={setPreTime}
-          startVolt={startVolt} setStartVolt={setStartVolt}
-          stopVolt={stopVolt} setStopVolt={setStopVolt}
-          incRate={incRate} setIncRate={setIncRate}
-          decRate={decRate} setDecRate={setDecRate}
-          holdTime={holdTime} setHoldTime={setHoldTime}
-          fileName={fileName} setFileName={setFileName}
-        />
-        <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1, mt: 2 }}>
-          <Button variant="contained" color="primary" onClick={handleStart} disabled={running || loading}>
-            Start Measurement / 始める
-          </Button>
-          <Button variant="outlined" color="secondary" onClick={handleStop} disabled={!running}>
-            Stop Measurement / 停止
-          </Button>
-          {/*
-          <CSVLink data={safeData} filename={fileName} style={{ textDecoration: 'none' }}>
-            <Button variant="outlined" disabled={safeData.length === 0}>Download CSV / CSVダウンロード</Button>
-          </CSVLink>
-          */}
-          <Button variant="outlined" onClick={handleDownloadGraphsPng} disabled={safeData.length === 0}>
-            Download Graphs as PNG / グラフPNGダウンロード
-          </Button>
-          <Button variant="outlined" onClick={handleDownloadExcelWithGraph} disabled={safeData.length === 0}>
-            Download data sheet / データシートダウンロード
-          </Button>
+      {/* Top: Measurement Parameters/Diagram and IR Camera side by side */}
+      <Box sx={{ display: 'flex', flexDirection: { xs: 'column', md: 'row' }, gap: 2, width: '100%', alignItems: 'stretch', flexWrap: 'wrap' }}>
+        {/* Left: Measurement Parameters/Diagram */}
+        <Box sx={{ flex: 1.2, minWidth: 320, display: 'flex' }}>
+          <Paper sx={{ p: 2, flex: 1, minHeight: 420, height: '100%', display: 'flex', flexDirection: 'column', boxSizing: 'border-box' }}>
+            <Typography variant="h6" gutterBottom>
+              Measurement Parameters / 測定パラメータ
+            </Typography>
+            <MeasurementDiagramForm
+              interval={interval} setIntervalVal={setIntervalVal}
+              preTime={preTime} setPreTime={setPreTime}
+              startVolt={startVolt} setStartVolt={setStartVolt}
+              stopVolt={stopVolt} setStopVolt={setStopVolt}
+              incRate={incRate} setIncRate={setIncRate}
+              decRate={decRate} setDecRate={setDecRate}
+              holdTime={holdTime} setHoldTime={setHoldTime}
+              fileName={fileName} setFileName={setFileName}
+            />
+            <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1, mt: 2 }}>
+              <Button variant="contained" color="primary" onClick={handleStart} disabled={running || loading}>
+                Start Measurement / 始める
+              </Button>
+              <Button variant="outlined" color="secondary" onClick={handleStop} disabled={!running}>
+                Stop Measurement / 停止
+              </Button>
+              {/*
+              <CSVLink data={safeData} filename={fileName} style={{ textDecoration: 'none' }}>
+                <Button variant="outlined" disabled={safeData.length === 0}>Download CSV / CSVダウンロード</Button>
+              </CSVLink>
+              */}
+              <Button variant="outlined" onClick={handleDownloadGraphsPng} disabled={safeData.length === 0}>
+                Download Graphs as PNG / グラフPNGダウンロード
+              </Button>
+              <Button variant="outlined" onClick={handleDownloadExcelWithGraph} disabled={safeData.length === 0}>
+                Download data sheet / データシートダウンロード
+              </Button>
+            </Box>
+            {error && <Alert severity="error" sx={{ mt: 2 }}>{error}</Alert>}
+            {status && status.status && <Alert severity="info" sx={{ mt: 2 }}>Status: {status.status}</Alert>}
+          </Paper>
         </Box>
-        {error && <Alert severity="error" sx={{ mt: 2 }}>{error}</Alert>}
-        {status && status.status && <Alert severity="info" sx={{ mt: 2 }}>Status: {status.status}</Alert>}
-      </Paper>
+        {/* Right: IR Camera Panel (wider) */}
+        <Box sx={{ flex: 1.8, minWidth: 340, display: 'flex' }}>
+          <Paper sx={{ p: 2, flex: 1, minHeight: 420, height: '100%', display: 'flex', flexDirection: 'column', boxSizing: 'border-box' }}>
+            <IRStreamPanel />
+          </Paper>
+        </Box>
+      </Box>
       {/* Bottom: Graphs and Data Table side by side */}
-      <Box sx={{ display: 'flex', flexDirection: { xs: 'column', md: 'row' }, gap: 2, width: '100%' }}>
+      <Box sx={{ display: 'flex', flexDirection: { xs: 'column', md: 'row' }, gap: 2, width: '100%', mt: 3 }}>
         {/* Left: Graphs */}
-        <Box sx={{ flex: 1, minWidth: 350, display: 'flex', flexDirection: 'column', gap: 2 }}>
-          <Paper sx={{ p: 2, flex: 1, minHeight: 300, display: 'flex', flexDirection: 'column' }}>
+        <Box sx={{ flex: 1, minWidth: 350, display: 'flex' }}>
+          <Paper sx={{ p: 2, flex: 1, minHeight: 400, height: '100%', display: 'flex', flexDirection: 'column', boxSizing: 'border-box' }}>
             <Typography variant="h6" gutterBottom>
               Live Graph / ライブグラフ
             </Typography>
@@ -318,9 +469,9 @@ const SeebeckMeasurementPanel: React.FC = () => {
             {loading && <CircularProgress sx={{ mt: 2 }} />}
           </Paper>
         </Box>
-        {/* Right: Data Table */}
-        <Box sx={{ flex: 1, mb: { xs: 2, md: 0 } }}>
-          <Paper sx={{ p: 2, height: '100%', display: 'flex', flexDirection: 'column' }}>
+        {/* Middle: Data Table */}
+        <Box sx={{ flex: 1, mb: { xs: 2, md: 0 }, display: 'flex' }}>
+          <Paper sx={{ p: 2, flex: 1, minHeight: 400, height: '100%', display: 'flex', flexDirection: 'column', boxSizing: 'border-box' }}>
             <Typography variant="h6" gutterBottom>
               Data Table / データ表
             </Typography>
