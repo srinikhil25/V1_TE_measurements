@@ -127,7 +127,16 @@ const MeasurementPanel = () => {
 
   // WebSocket connection for real-time updates
   useEffect(() => {
-    const ws = new WebSocket('ws://localhost:8080/api/instrument/ws');
+    let wsUrl;
+    if (import.meta.env.VITE_WS_BASE_URL) {
+      wsUrl = `${import.meta.env.VITE_WS_BASE_URL}/instrument/ws`;
+    } else if (window.location.port === "5173") {
+      wsUrl = "ws://localhost:8080/api/instrument/ws";
+    } else {
+      const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      wsUrl = `${wsProtocol}//${window.location.host}/api/instrument/ws`;
+    }
+    const ws = new WebSocket(wsUrl);
     
     ws.onmessage = (event) => {
       const data = JSON.parse(event.data);

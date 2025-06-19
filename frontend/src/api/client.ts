@@ -1,6 +1,6 @@
 import axios from 'axios';
 
-const API_BASE_URL = `http://localhost:8080/api`;
+const VITE_API_BASE_URL = import.meta.env.VITE_API_BASE_URL || `${window.location.protocol}//${window.location.host}/api`;
 
 export interface MeasurementConfig {
   channel: number;
@@ -21,7 +21,7 @@ export interface InstrumentStatus {
 }
 
 const api = axios.create({
-  baseURL: API_BASE_URL,
+  baseURL: VITE_API_BASE_URL,
   headers: {
     'Content-Type': 'application/json',
   },

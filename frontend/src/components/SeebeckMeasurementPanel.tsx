@@ -19,7 +19,7 @@ interface DataRow {
   "Delta Temp [oC]": number;
 }
 
-const API_BASE_URL = `http://localhost:8080/api/seebeck`;
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || `${window.location.protocol}//${window.location.host}/api/seebeck`;
 
 // Create a custom axios instance for the API
 const api = axios.create({
@@ -75,7 +75,16 @@ const IRStreamPanel = () => {
     let reconnectTimeout: number | null = null;
 
     const connect = () => {
-      ws = new WebSocket('ws://localhost:8080/api/ir_camera/ws');
+      let wsUrl;
+      if (import.meta.env.VITE_WS_BASE_URL) {
+        wsUrl = `${import.meta.env.VITE_WS_BASE_URL}/ir_camera/ws`;
+      } else if (window.location.port === "5173") {
+        wsUrl = "ws://localhost:8080/api/ir_camera/ws";
+      } else {
+        const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        wsUrl = `${wsProtocol}//${window.location.host}/api/ir_camera/ws`;
+      }
+      ws = new WebSocket(wsUrl);
       wsRef.current = ws;
 
       ws.onmessage = (event) => {
