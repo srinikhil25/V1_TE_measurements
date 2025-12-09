@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import {
-  Box, Paper, Typography, Button, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, CircularProgress, Alert
+  Box, Paper, Typography, Button, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, CircularProgress, Alert, Switch, FormControlLabel
 } from '@mui/material';
 import axios from 'axios';
 import {
@@ -19,7 +19,9 @@ interface DataRow {
   "Delta Temp [oC]": number;
 }
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || `${window.location.protocol}//${window.location.host}/api/seebeck`;
+// Normalize API base: default to '/api', then append '/seebeck'
+const API_BASE = (import.meta.env.VITE_API_BASE_URL || '/api').replace(/\/$/, '');
+const API_BASE_URL = `${API_BASE}/seebeck`;
 
 // Create a custom axios instance for the API
 const api = axios.create({
@@ -59,7 +61,11 @@ function engFormat(val: number): string {
   return val.toPrecision(3);
 }
 
-const IRStreamPanel = () => {
+interface IRStreamPanelProps {
+  enabled: boolean;
+}
+
+const IRStreamPanel: React.FC<IRStreamPanelProps> = ({ enabled }) => {
   const [imgSrc, setImgSrc] = useState('');
   const [avgTemp, setAvgTemp] = useState('--');
   const [minTemp, setMinTemp] = useState('--');
@@ -67,14 +73,32 @@ const IRStreamPanel = () => {
   const [temps, setTemps] = useState<number[][] | null>(null);
   const [hoverTemp, setHoverTemp] = useState<string | null>(null);
   const [tooltipPos, setTooltipPos] = useState<{x: number, y: number} | null>(null);
+  const [connectionStatus, setConnectionStatus] = useState<'disconnected' | 'connecting' | 'connected' | 'error'>('disconnected');
   const wsRef = useRef<WebSocket | null>(null);
   const imgRef = useRef<HTMLImageElement | null>(null);
 
   useEffect(() => {
+    if (!enabled) {
+      // Disconnect if disabled
+      if (wsRef.current) {
+        wsRef.current.close();
+        wsRef.current = null;
+      }
+      setImgSrc('');
+      setAvgTemp('--');
+      setMinTemp('--');
+      setMaxTemp('--');
+      setTemps(null);
+      setConnectionStatus('disconnected');
+      return;
+    }
+
     let ws: WebSocket | null = null;
     let reconnectTimeout: number | null = null;
 
     const connect = () => {
+      if (!enabled) return; // Don't connect if disabled
+      
       let wsUrl;
       if (import.meta.env.VITE_WS_BASE_URL) {
         wsUrl = `${import.meta.env.VITE_WS_BASE_URL}/ir_camera/ws`;
@@ -84,8 +108,14 @@ const IRStreamPanel = () => {
         const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
         wsUrl = `${wsProtocol}//${window.location.host}/api/ir_camera/ws`;
       }
+      
+      setConnectionStatus('connecting');
       ws = new WebSocket(wsUrl);
       wsRef.current = ws;
+
+      ws.onopen = () => {
+        setConnectionStatus('connected');
+      };
 
       ws.onmessage = (event) => {
         try {
@@ -95,25 +125,37 @@ const IRStreamPanel = () => {
           setMinTemp(data.min.toFixed(1));
           setMaxTemp(data.max.toFixed(1));
           setTemps(data.temps);
+          setConnectionStatus('connected');
         } catch {
           setImgSrc('data:image/jpeg;base64,' + event.data);
+          setConnectionStatus('connected');
         }
       };
+      
       ws.onerror = () => {
+        setConnectionStatus('error');
         ws && ws.close();
       };
+      
       ws.onclose = () => {
-        reconnectTimeout = window.setTimeout(connect, 1000);
+        setConnectionStatus('disconnected');
+        if (enabled) {
+          // Only reconnect if still enabled
+          reconnectTimeout = window.setTimeout(connect, 1000);
+        }
       };
     };
 
     connect();
 
     return () => {
-      if (wsRef.current) wsRef.current.close();
+      if (wsRef.current) {
+        wsRef.current.close();
+        wsRef.current = null;
+      }
       if (reconnectTimeout) clearTimeout(reconnectTimeout);
     };
-  }, []);
+  }, [enabled]);
 
   // Mouse move handler
   const handleMouseMove = (e: React.MouseEvent<HTMLImageElement, MouseEvent>) => {
@@ -148,8 +190,23 @@ const IRStreamPanel = () => {
   return (
     <Box sx={{ width: '100%', mb: 2, position: 'relative' }}>
       <Typography variant="h6" gutterBottom>
-        IR Camera Live Stream
+        IR Camera Live Stream {!enabled && '(Disabled)'}
       </Typography>
+      {!enabled && (
+        <Alert severity="info" sx={{ mb: 2 }}>
+          IR camera is disabled. Seebeck measurements will work without it.
+        </Alert>
+      )}
+      {enabled && connectionStatus === 'connecting' && (
+        <Alert severity="info" sx={{ mb: 2 }}>
+          Connecting to IR camera...
+        </Alert>
+      )}
+      {enabled && connectionStatus === 'error' && (
+        <Alert severity="warning" sx={{ mb: 2 }}>
+          IR camera connection failed. Retrying...
+        </Alert>
+      )}
       <Box sx={{ position: 'relative', width: '100%' }}>
         {imgSrc ? (
           <img
@@ -174,7 +231,7 @@ const IRStreamPanel = () => {
               background: '#fafafa',
             }}
           >
-            No IR stream available
+            {enabled ? 'Connecting to IR camera...' : 'IR camera disabled'}
           </Box>
         )}
         {/* Tooltip */}
@@ -222,6 +279,7 @@ const SeebeckMeasurementPanel: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [status, setStatus] = useState<any>(null);
+  const [irCameraEnabled, setIrCameraEnabled] = useState(false);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const tableContainerRef = useRef<HTMLDivElement>(null);
   const liveGraphRef = useRef<HTMLDivElement>(null);
@@ -283,28 +341,40 @@ const SeebeckMeasurementPanel: React.FC = () => {
       };
       
       // Debug log
+      console.log('API_BASE_URL:', API_BASE_URL);
       console.log('Sending params:', params);
+      console.log('Full URL will be:', `${API_BASE_URL}/start`);
       
-      const response = await api.post('/start', params, {
-        headers: {
-          'Content-Type': 'application/json',
-          'Accept': 'application/json'
-        }
-      });
+      const response = await api.post('/start', params);
       
       console.log('Response:', response);
+      console.log('Response data:', response.data);
       
-      if (response.data.status === 'started') {
+      if (response.data && response.data.status === 'started') {
         setRunning(true);
+        setLoading(false);
       } else {
-        setError('Failed to start measurement');
+        setError('Failed to start measurement: Unexpected response');
         setLoading(false);
       }
     } catch (err: any) {
       console.error('Start error:', err);
-      console.error('Request config:', err.config);
+      console.error('Error message:', err.message);
+      console.error('Error response:', err.response);
+      console.error('Request URL:', err.config?.url);
+      console.error('Request baseURL:', err.config?.baseURL);
       console.error('Request data:', err.config?.data);
-      setError(err.response?.data?.detail || 'Failed to start measurement');
+      
+      let errorMessage = 'Failed to start measurement';
+      if (err.response) {
+        errorMessage = err.response.data?.detail || err.response.data?.message || errorMessage;
+      } else if (err.request) {
+        errorMessage = 'Network error: Could not reach the server. Please check if the backend is running.';
+      } else {
+        errorMessage = err.message || errorMessage;
+      }
+      
+      setError(errorMessage);
       setLoading(false);
     }
   };
@@ -426,7 +496,23 @@ const SeebeckMeasurementPanel: React.FC = () => {
         {/* Right: IR Camera Panel (wider) */}
         <Box sx={{ flex: 1.8, minWidth: 340, display: 'flex' }}>
           <Paper sx={{ p: 2, flex: 1, minHeight: 420, height: '100%', display: 'flex', flexDirection: 'column', boxSizing: 'border-box' }}>
-            <IRStreamPanel />
+            <Box sx={{ mb: 1, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <Typography variant="h6" sx={{ flex: 1 }}>
+                IR Camera (Optional)
+              </Typography>
+              <FormControlLabel
+                control={
+                  <Switch
+                    checked={irCameraEnabled}
+                    onChange={(e) => setIrCameraEnabled(e.target.checked)}
+                    color="primary"
+                  />
+                }
+                label={irCameraEnabled ? "Enabled" : "Disabled"}
+                sx={{ ml: 1 }}
+              />
+            </Box>
+            <IRStreamPanel enabled={irCameraEnabled} />
           </Paper>
         </Box>
       </Box>

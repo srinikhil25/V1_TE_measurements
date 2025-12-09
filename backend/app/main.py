@@ -5,6 +5,7 @@ import logging
 from .routers import instrument
 from .routers import seebeck
 from .routers import ir_camera
+from .routers import iv
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -63,6 +64,11 @@ app.include_router(
     seebeck.router,
     prefix="/api/seebeck",
     tags=["seebeck"]
+)
+app.include_router(
+    iv.router,
+    prefix="/api/iv",
+    tags=["iv"]
 )
 app.include_router(ir_camera.router)
 

@@ -1,7 +1,10 @@
 import threading
 import time
+import logging
 from typing import Optional, Dict, List
 from .instrument import SeebeckSystem
+
+logger = logging.getLogger(__name__)
 
 class MeasurementSessionManager:
     def __init__(self):
@@ -49,8 +52,22 @@ class MeasurementSessionManager:
 
     def _run_session(self, params: Dict):
         try:
-            self.seebeck_system.connect_all()
-            self.seebeck_system.initialize_all()
+            # Connect to all instruments
+            if not self.seebeck_system.connect_all():
+                self.session_status = "error: Failed to connect to one or more instruments. Please check instrument connections and try again."
+                self.session_active = False
+                logger.error("Failed to connect to instruments. Session aborted.")
+                return
+            
+            # Initialize all instruments
+            try:
+                self.seebeck_system.initialize_all()
+            except Exception as e:
+                self.session_status = f"error: Failed to initialize instruments: {str(e)}"
+                self.session_active = False
+                logger.error(f"Failed to initialize instruments: {str(e)}")
+                self.seebeck_system.disconnect_all()
+                return
             interval = params["interval"]
             pre_time = params["pre_time"]
             start_volt = params["start_volt"]

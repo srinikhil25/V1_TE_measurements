@@ -1,6 +1,6 @@
 import axios from 'axios';
 
-const VITE_API_BASE_URL = import.meta.env.VITE_API_BASE_URL || `${window.location.protocol}//${window.location.host}/api`;
+const VITE_API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || '/api').replace(/\/$/, '');
 
 export interface MeasurementConfig {
   channel: number;
