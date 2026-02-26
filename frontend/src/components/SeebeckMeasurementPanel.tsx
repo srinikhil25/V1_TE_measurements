@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import {
-  Box, Paper, Typography, Button, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, CircularProgress, Alert, Switch, FormControlLabel
+  Box, Paper, Typography, Button, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, CircularProgress, Alert, Switch, FormControlLabel, TextField, FormControl, InputLabel, Select, MenuItem
 } from '@mui/material';
 import axios from 'axios';
 import {
@@ -17,11 +17,26 @@ interface DataRow {
   "Temp1 [oC]": number;
   "Temp2 [oC]": number;
   "Delta Temp [oC]": number;
+  "T0 [oC]"?: number;
+  "T0 [K]"?: number;
+  "delta_T_over_T0"?: number | null;
+  "S [µV/K]"?: number | null;
+  branch?: "heating" | "cooling";
+}
+
+interface BinnedAnalysisRow {
+  T0_center_K: number;
+  T0_min_K: number;
+  T0_max_K: number;
+  S_uV_per_K: number;
+  S_uncertainty_uV_per_K?: number | null;
+  n_points: number;
 }
 
 // Normalize API base: default to '/api', then append '/seebeck'
 const API_BASE = (import.meta.env.VITE_API_BASE_URL || '/api').replace(/\/$/, '');
 const API_BASE_URL = `${API_BASE}/seebeck`;
+const IR_CAMERA_BASE = `${API_BASE}/ir_camera`;
 
 // Create a custom axios instance for the API
 const api = axios.create({
@@ -213,7 +228,7 @@ const IRStreamPanel: React.FC<IRStreamPanelProps> = ({ enabled }) => {
             ref={imgRef}
             src={imgSrc}
             alt="IR Camera Stream"
-            style={{ width: '100%', maxHeight: 420, objectFit: 'contain', borderRadius: 8, border: '1px solid #ccc', display: 'block' }}
+            style={{ width: '100%', maxHeight: 720, objectFit: 'contain', borderRadius: 8, border: '1px solid #ccc', display: 'block' }}
             onMouseMove={handleMouseMove}
             onMouseLeave={handleMouseLeave}
           />
@@ -221,7 +236,8 @@ const IRStreamPanel: React.FC<IRStreamPanelProps> = ({ enabled }) => {
           <Box
             sx={{
               width: '100%',
-              height: 420,
+              height: 480,
+              minHeight: 420,
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
@@ -268,22 +284,36 @@ const IRStreamPanel: React.FC<IRStreamPanelProps> = ({ enabled }) => {
 const SeebeckMeasurementPanel: React.FC = () => {
   const [interval, setIntervalVal] = useState(2);
   const [preTime, setPreTime] = useState(1);
-  const [startVolt, setStartVolt] = useState(0.0);
-  const [stopVolt, setStopVolt] = useState(1.0);
-  const [incRate, setIncRate] = useState(1.0);
-  const [decRate, setDecRate] = useState(1.0);
+  const [startVolt, setStartVolt] = useState('0');
+  const [stopVolt, setStopVolt] = useState('1');
+  const [incRate, setIncRate] = useState('1');
+  const [decRate, setDecRate] = useState('1');
   const [holdTime, setHoldTime] = useState(600);
   const [fileName, setFileName] = useState('seebeck_results.csv');
+  const [sampleId, setSampleId] = useState('');
+  const [operator, setOperator] = useState('');
+  const [notes, setNotes] = useState('');
+  const [targetT0K, setTargetT0K] = useState<number | ''>('');
+  const [probeArrangement, setProbeArrangement] = useState<'2-probe' | '4-probe' | ''>('');
+  const [coolingTargetDeltaT, setCoolingTargetDeltaT] = useState(5);
+  const [coolingTimeoutMin, setCoolingTimeoutMin] = useState(10);
+  const [stabilizationDelayS, setStabilizationDelayS] = useState(0);
+  const [pk160Unit, setPk160Unit] = useState<'mA' | 'A'>('mA');
   const [running, setRunning] = useState(false);
   const [data, setData] = useState<DataRow[]>([]);
+  const [analysis, setAnalysis] = useState<BinnedAnalysisRow[]>([]);
+  const [metadata, setMetadata] = useState<Record<string, unknown>>({});
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [status, setStatus] = useState<any>(null);
   const [irCameraEnabled, setIrCameraEnabled] = useState(false);
+  const [irCameraBackend, setIrCameraBackend] = useState<'otc' | 'legacy' | null>(null);
+  const [irCameraBackendReason, setIrCameraBackendReason] = useState<string | null>(null);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const tableContainerRef = useRef<HTMLDivElement>(null);
   const liveGraphRef = useRef<HTMLDivElement>(null);
   const deltaGraphRef = useRef<HTMLDivElement>(null);
+  const seebeckGraphRef = useRef<HTMLDivElement>(null);
 
   // Poll session status and data
   useEffect(() => {
@@ -294,9 +324,11 @@ const SeebeckMeasurementPanel: React.FC = () => {
           const statusResp = await api.get('/status');
           setStatus(statusResp.data);
           const dataResp = await api.get('/data');
-          console.log('Fetched data:', dataResp.data);
-          const arr = Array.isArray(dataResp.data) ? dataResp.data : dataResp.data.data;
-          setData(Array.isArray(arr) ? arr : []);
+          const payload = dataResp.data?.data != null ? dataResp.data : { data: dataResp.data };
+          const arr = Array.isArray(payload.data) ? payload.data : [];
+          setData(arr);
+          setAnalysis(Array.isArray(payload.analysis) ? payload.analysis : []);
+          setMetadata(payload.metadata && typeof payload.metadata === 'object' ? payload.metadata : {});
           if (statusResp.data.status === 'finished' || statusResp.data.status === 'stopped' || statusResp.data.status?.startsWith('error')) {
             setRunning(false);
             setLoading(false);
@@ -325,20 +357,71 @@ const SeebeckMeasurementPanel: React.FC = () => {
     }
   }, [data]);
 
+  // Fetch IR camera backend (otc vs legacy) when IR is enabled
+  useEffect(() => {
+    if (!irCameraEnabled) {
+      setIrCameraBackend(null);
+      setIrCameraBackendReason(null);
+      return;
+    }
+    let cancelled = false;
+    axios.get<{ backend: string; reason?: string }>(`${IR_CAMERA_BASE}/backend`).then(r => {
+      if (!cancelled && r.data?.backend) {
+        setIrCameraBackend(r.data.backend as 'otc' | 'legacy');
+        setIrCameraBackendReason(r.data.reason ?? null);
+      }
+    }).catch(() => { if (!cancelled) setIrCameraBackend(null); setIrCameraBackendReason(null); });
+    return () => { cancelled = true; };
+  }, [irCameraEnabled]);
+
   const handleStart = async () => {
     setError(null);
     setData([]);
+    // Client-side validation to match backend rules
+    if (interval <= 0) {
+      setError('Measurement interval must be positive (seconds).');
+      return;
+    }
+    if (preTime < 0 || holdTime < 0) {
+      setError('Pre time and hold time must be non-negative.');
+      return;
+    }
+    const incRateNum = parseFloat(incRate);
+    const decRateNum = parseFloat(decRate);
+    if (!Number.isFinite(incRateNum) || incRateNum <= 0 || !Number.isFinite(decRateNum) || decRateNum <= 0) {
+      setError('Inc. rate and Dec. rate must be positive numbers.');
+      return;
+    }
+    const startNum = parseFloat(startVolt);
+    const stopNum = parseFloat(stopVolt);
+    if (!Number.isFinite(startNum) || !Number.isFinite(stopNum)) {
+      setError('Start (I₀) and Stop (I) must be valid numbers.');
+      return;
+    }
+    if (startNum > stopNum) {
+      setError('Start value (I₀) must be ≤ stop value (I).');
+      return;
+    }
     setLoading(true);
     try {
-      const params = {
-        interval: interval,
+      const params: Record<string, unknown> = {
+        interval,
         pre_time: preTime,
-        start_volt: startVolt,
-        stop_volt: stopVolt,
-        inc_rate: incRate,
-        dec_rate: decRate,
-        hold_time: holdTime
+        start_volt: startNum,
+        stop_volt: stopNum,
+        inc_rate: incRateNum,
+        dec_rate: decRateNum,
+        hold_time: holdTime,
+        cooling_target_delta_t: coolingTargetDeltaT,
+        cooling_timeout_s: coolingTimeoutMin * 60,
+        stabilization_delay_s: stabilizationDelayS,
+        pk160_current_unit: pk160Unit,
       };
+      if (sampleId.trim()) params.sample_id = sampleId.trim();
+      if (operator.trim()) params.operator = operator.trim();
+      if (notes.trim()) params.notes = notes.trim();
+      if (targetT0K !== '') params.target_T0_K = Number(targetT0K);
+      if (probeArrangement) params.probe_arrangement = probeArrangement;
       
       // Debug log
       console.log('API_BASE_URL:', API_BASE_URL);
@@ -410,6 +493,12 @@ const SeebeckMeasurementPanel: React.FC = () => {
     deltaCanvas.toBlob(blob => {
       if (blob) saveAs(blob, 'temf_vs_delta_temp.png');
     });
+    if (seebeckGraphRef.current) {
+      const seebeckCanvas = await html2canvas(seebeckGraphRef.current, { backgroundColor: null });
+      seebeckCanvas.toBlob(blob => {
+        if (blob) saveAs(blob, 'seebeck_vs_temperature.png');
+      });
+    }
   };
 
   const handleDownloadExcelWithGraph = async () => {
@@ -422,33 +511,66 @@ const SeebeckMeasurementPanel: React.FC = () => {
     const workbook = new ExcelJS.Workbook();
     const sheet = workbook.addWorksheet('Data');
     // Add header
-    sheet.addRow(["Time [s]", "TEMF [mV]", "Temp1 [oC]", "Temp2 [oC]", "Delta Temp (Δt) / 差温度 [°C]"]);
-    // Add data
     const safeData = Array.isArray(data) ? data : [];
+    const safeAnalysis = Array.isArray(analysis) ? analysis : [];
+    // Metadata block at top
+    sheet.addRow(["Metadata"]);
+    if (metadata?.sample_id) sheet.addRow(["Sample ID", metadata.sample_id]);
+    if (metadata?.operator) sheet.addRow(["Operator", metadata.operator]);
+    if (metadata?.target_T0_K != null) sheet.addRow(["Target T₀ (K)", metadata.target_T0_K]);
+    if (metadata?.probe_arrangement) sheet.addRow(["Probe arrangement", metadata.probe_arrangement]);
+    if (metadata?.notes) sheet.addRow(["Notes", metadata.notes]);
+    sheet.addRow([]);
+    sheet.addRow(["Time [s]", "TEMF [mV]", "Temp1 [oC]", "Temp2 [oC]", "Delta Temp [°C]", "T0 [°C]", "T0 [K]", "ΔT/T₀", "S [µV/K]"]);
     safeData.forEach(row => {
       sheet.addRow([
         row["Time [s]"],
         row["TEMF [mV]"],
         row["Temp1 [oC]"],
         row["Temp2 [oC]"],
-        row["Delta Temp [oC]"]
+        row["Delta Temp [oC]"],
+        row["T0 [oC]"],
+        row["T0 [K]"],
+        row["delta_T_over_T0"] != null ? row["delta_T_over_T0"] : "",
+        row["S [µV/K]"] != null ? row["S [µV/K]"] : ""
       ]);
     });
-    // Add image
+    const metaRows = [metadata?.sample_id, metadata?.operator, metadata?.target_T0_K != null, metadata?.probe_arrangement, metadata?.notes].filter(Boolean).length;
     const imageId = workbook.addImage({ base64: imgData, extension: 'png' });
-    // Place image below the data (row count + 2)
-    const imgRow = safeData.length + 3;
+    const imgRow = 1 + metaRows + 1 + 1 + safeData.length + 2;
     sheet.addImage(imageId, {
       tl: { col: 0, row: imgRow },
       ext: { width: 600, height: 300 }
     });
-    // Save
+    // Binned S (fit) sheet
+    if (safeAnalysis.length > 0) {
+      const sheetFit = workbook.addWorksheet('Binned S (fit)');
+      sheetFit.addRow(["T0_center_K", "T0_min_K", "T0_max_K", "S [µV/K]", "S uncertainty [µV/K]", "n_points"]);
+      safeAnalysis.forEach(r => {
+        sheetFit.addRow([r.T0_center_K, r.T0_min_K, r.T0_max_K, r.S_uV_per_K, r.S_uncertainty_uV_per_K ?? "", r.n_points]);
+      });
+    }
     const buffer = await workbook.xlsx.writeBuffer();
     saveAs(new Blob([buffer]), 'data_sheet.xlsx');
   };
 
   // Defensive: ensure data is always an array
   const safeData = Array.isArray(data) ? data : [];
+  // TEMF vs ΔT: use a proper numeric x-axis scale (ΔT from 0 to max), not point order
+  const deltaTempExtent = safeData.reduce<[number, number]>(
+    (acc, row) => {
+      const d = row["Delta Temp [oC]"];
+      if (typeof d === 'number' && !Number.isNaN(d)) {
+        return [Math.min(acc[0], d), Math.max(acc[1], d)];
+      }
+      return acc;
+    },
+    [Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]
+  );
+  const deltaTempDomain: [number, number] =
+    deltaTempExtent[1] >= deltaTempExtent[0] && Number.isFinite(deltaTempExtent[0])
+      ? [Math.max(0, Math.floor(deltaTempExtent[0])), Math.ceil(deltaTempExtent[1]) + 1]
+      : [0, 1];
 
   return (
     <Box sx={{ width: '100%' }}>
@@ -469,7 +591,33 @@ const SeebeckMeasurementPanel: React.FC = () => {
               decRate={decRate} setDecRate={setDecRate}
               holdTime={holdTime} setHoldTime={setHoldTime}
               fileName={fileName} setFileName={setFileName}
+              currentUnit={pk160Unit}
             />
+            <Typography variant="subtitle2" sx={{ mt: 1.5 }}>Metadata & options</Typography>
+            <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 1, mt: 0.5 }}>
+              <TextField size="small" label="Sample ID" value={sampleId} onChange={e => setSampleId(e.target.value)} />
+              <TextField size="small" label="Operator" value={operator} onChange={e => setOperator(e.target.value)} />
+              <TextField size="small" label="Target T₀ (K)" type="number" value={targetT0K} onChange={e => setTargetT0K(e.target.value === '' ? '' : Number(e.target.value))} />
+              <FormControl size="small">
+                <InputLabel>Probe</InputLabel>
+                <Select value={probeArrangement || ''} label="Probe" onChange={e => setProbeArrangement((e.target.value as '2-probe' | '4-probe') || '')}>
+                  <MenuItem value="">—</MenuItem>
+                  <MenuItem value="2-probe">2-probe</MenuItem>
+                  <MenuItem value="4-probe">4-probe</MenuItem>
+                </Select>
+              </FormControl>
+              <TextField size="small" label="Cooling target ΔT (°C)" type="number" value={coolingTargetDeltaT} onChange={e => setCoolingTargetDeltaT(Number(e.target.value) || 5)} />
+              <TextField size="small" label="Cooling timeout (min)" type="number" value={coolingTimeoutMin} onChange={e => setCoolingTimeoutMin(Number(e.target.value) || 10)} />
+              <TextField size="small" label="Stabilization delay (s)" type="number" value={stabilizationDelayS} onChange={e => setStabilizationDelayS(Number(e.target.value) || 0)} />
+              <FormControl size="small">
+                <InputLabel>PK160 unit</InputLabel>
+                <Select value={pk160Unit} label="PK160 unit" onChange={e => setPk160Unit(e.target.value as 'mA' | 'A')}>
+                  <MenuItem value="mA">mA</MenuItem>
+                  <MenuItem value="A">A</MenuItem>
+                </Select>
+              </FormControl>
+            </Box>
+            <TextField fullWidth size="small" label="Notes" value={notes} onChange={e => setNotes(e.target.value)} multiline minRows={1} sx={{ mt: 1 }} />
             <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1, mt: 2 }}>
               <Button variant="contained" color="primary" onClick={handleStart} disabled={running || loading}>
                 Start Measurement / 始める
@@ -490,13 +638,32 @@ const SeebeckMeasurementPanel: React.FC = () => {
               </Button>
             </Box>
             {error && <Alert severity="error" sx={{ mt: 2 }}>{error}</Alert>}
-            {status && status.status && <Alert severity="info" sx={{ mt: 2 }}>Status: {status.status}</Alert>}
+            {status?.warn_large_gradient && (
+              <Alert severity="warning" sx={{ mt: 2 }}>ΔT/T₀ is large in some points; differential method assumes small gradient (ΔT/T₀ ≪ 1).</Alert>
+            )}
+            {status && status.status && (
+              <Alert severity="info" sx={{ mt: 2 }}>
+                Status: {status.status}
+                {status.estimated_total_s != null && status.hold_time_s != null && (
+                  <> • Total run ~{status.estimated_total_s} s (hold at peak: {status.hold_time_s} s only)</>
+                )}
+                {status.phase != null && (
+                  <> • Phase: <strong>{status.phase === 'ramp_up' ? 'Ramp up' : status.phase === 'hold' ? 'Hold' : status.phase === 'ramp_down' ? 'Ramp down' : status.phase === 'cooling_tail' ? 'Cooling (ΔT→0)' : status.phase}</strong></>
+                )}
+                {status.step != null && status.total_steps != null && (
+                  <> • Step {status.step}/{status.total_steps}</>
+                )}
+                {status.estimated_remaining_s != null && status.estimated_remaining_s > 0 && (
+                  <> • ~{status.estimated_remaining_s} s left (let it finish to see cooling curve)</>
+                )}
+              </Alert>
+            )}
           </Paper>
         </Box>
         {/* Right: IR Camera Panel (wider) */}
         <Box sx={{ flex: 1.8, minWidth: 340, display: 'flex' }}>
           <Paper sx={{ p: 2, flex: 1, minHeight: 420, height: '100%', display: 'flex', flexDirection: 'column', boxSizing: 'border-box' }}>
-            <Box sx={{ mb: 1, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <Box sx={{ mb: 1, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 1 }}>
               <Typography variant="h6" sx={{ flex: 1 }}>
                 IR Camera (Optional)
               </Typography>
@@ -511,6 +678,35 @@ const SeebeckMeasurementPanel: React.FC = () => {
                 label={irCameraEnabled ? "Enabled" : "Disabled"}
                 sx={{ ml: 1 }}
               />
+              {irCameraEnabled && irCameraBackend && (
+                <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end' }}>
+                  <Typography variant="caption" sx={{ color: irCameraBackend === 'otc' ? 'success.main' : 'warning.main' }}>
+                    {irCameraBackend === 'otc' ? 'OTC SDK (NUC available)' : 'Legacy SDK (NUC not available)'}
+                  </Typography>
+                  {irCameraBackend === 'legacy' && irCameraBackendReason && (
+                    <Typography variant="caption" sx={{ color: 'text.secondary', maxWidth: 280 }} title={irCameraBackendReason}>
+                      {irCameraBackendReason.length > 45 ? `${irCameraBackendReason.slice(0, 45)}…` : irCameraBackendReason}
+                    </Typography>
+                  )}
+                </Box>
+              )}
+              {irCameraEnabled && (
+                <Button
+                  size="small"
+                  variant="outlined"
+                  onClick={async () => {
+                    try {
+                      const r = await axios.post<{ ok: boolean; message?: string }>(`${IR_CAMERA_BASE}/nuc`);
+                      if (r.data?.ok) alert('NUC triggered. Wait a few seconds for the camera to stabilize.');
+                      else if (r.data?.message) alert(r.data.message);
+                    } catch (e: any) {
+                      alert(e?.response?.data?.message || e?.message || 'Failed to trigger NUC');
+                    }
+                  }}
+                >
+                  Trigger NUC
+                </Button>
+              )}
             </Box>
             <IRStreamPanel enabled={irCameraEnabled} />
           </Paper>
@@ -534,8 +730,8 @@ const SeebeckMeasurementPanel: React.FC = () => {
                   <Tooltip />
                   <Legend />
                   <Line yAxisId="left" type="monotone" dataKey="TEMF [mV]" stroke="#1976d2" dot={false} name="TEMF [mV]" />
-                  <Line yAxisId="right" type="monotone" dataKey="Temp1 [oC]" stroke="#d32f2f" dot={false} name="Temp1 [°C]" />
-                  <Line yAxisId="right" type="monotone" dataKey="Temp2 [oC]" stroke="#388e3c" dot={false} name="Temp2 [°C]" />
+                  <Line yAxisId="right" type="monotone" dataKey="Temp1 [oC]" stroke="#388e3c" dot={false} name="Temp1 [°C]" />
+                  <Line yAxisId="right" type="monotone" dataKey="Temp2 [oC]" stroke="#d32f2f" dot={false} name="Temp2 [°C]" />
                 </LineChart>
               </ResponsiveContainer>
             </Box>
@@ -544,20 +740,51 @@ const SeebeckMeasurementPanel: React.FC = () => {
             </Typography>
             <Box sx={{ height: 250 }} ref={deltaGraphRef}>
               <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={safeData} margin={{ top: 10, right: 40, left: 40, bottom: 40 }}>
+                <LineChart
+                  data={safeData.map(row => ({
+                    ...row,
+                    "TEMF heating [mV]": row.branch !== "cooling" ? row["TEMF [mV]"] : undefined,
+                    "TEMF cooling [mV]": row.branch === "cooling" ? row["TEMF [mV]"] : undefined,
+                  }))}
+                  margin={{ top: 10, right: 40, left: 40, bottom: 40 }}
+                >
                   <CartesianGrid strokeDasharray="3 3" />
                   <XAxis
+                    type="number"
                     dataKey="Delta Temp [oC]"
+                    domain={deltaTempDomain}
                     label={{ value: 'Delta Temp (Δt) / 差温度 [°C]', position: 'insideBottom', offset: -5 }}
                     tickFormatter={engFormat}
                     tick={{ fontSize: 12 }}
-                    angle={-30}
                     tickCount={8}
                   />
                   <YAxis label={{ value: 'TEMF [mV]', angle: -90, position: 'insideLeft' }} />
                   <Tooltip />
                   <Legend verticalAlign="bottom" align="center" />
-                  <Line type="monotone" dataKey="TEMF [mV]" stroke="#1976d2" dot={true} name="TEMF [mV]" />
+                  <Line type="monotone" dataKey="TEMF heating [mV]" stroke="#ed6c02" dot={false} name="Heating (ΔT↑)" connectNulls={false} />
+                  <Line type="monotone" dataKey="TEMF cooling [mV]" stroke="#1976d2" dot={false} name="Cooling (ΔT↓)" connectNulls={false} />
+                </LineChart>
+              </ResponsiveContainer>
+            </Box>
+            <Typography variant="h6" gutterBottom sx={{ mt: 2 }}>
+              Seebeck coefficient S vs average temperature T₀
+            </Typography>
+            <Box sx={{ height: 250 }} ref={seebeckGraphRef}>
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart
+                  data={safeData.filter(row => row["S [µV/K]"] != null && row["T0 [K]"] != null)}
+                  margin={{ top: 10, right: 40, left: 40, bottom: 40 }}
+                >
+                  <CartesianGrid strokeDasharray="3 3" />
+                  <XAxis
+                    dataKey="T0 [K]"
+                    label={{ value: 'T₀ [K]', position: 'insideBottom', offset: -5 }}
+                    tick={{ fontSize: 12 }}
+                  />
+                  <YAxis label={{ value: 'S [µV/K]', angle: -90, position: 'insideLeft' }} />
+                  <Tooltip />
+                  <Legend verticalAlign="bottom" align="center" />
+                  <Line type="monotone" dataKey="S [µV/K]" stroke="#9c27b0" dot={false} name="S [µV/K]" />
                 </LineChart>
               </ResponsiveContainer>
             </Box>
@@ -578,22 +805,59 @@ const SeebeckMeasurementPanel: React.FC = () => {
                     <TableCell>TEMF [mV]</TableCell>
                     <TableCell>Temp1 [°C]</TableCell>
                     <TableCell>Temp2 [°C]</TableCell>
-                    <TableCell>Delta Temp (Δt) / 差温度 [°C]</TableCell>
+                    <TableCell>ΔT [°C]</TableCell>
+                    <TableCell>ΔT/T₀</TableCell>
+                    <TableCell>T₀ [°C]</TableCell>
+                    <TableCell>T₀ [K]</TableCell>
+                    <TableCell>S [µV/K]</TableCell>
                   </TableRow>
                 </TableHead>
                 <TableBody>
                   {safeData.map((row, idx) => (
                     <TableRow key={idx}>
                       <TableCell>{row["Time [s]"]}</TableCell>
-                      <TableCell>{row["TEMF [mV]"]?.toFixed(3)}</TableCell>
-                      <TableCell>{row["Temp1 [oC]"]?.toFixed(2)}</TableCell>
-                      <TableCell>{row["Temp2 [oC]"]?.toFixed(2)}</TableCell>
-                      <TableCell>{row["Delta Temp [oC]"]?.toFixed(2)}</TableCell>
+                      <TableCell>{row["TEMF [mV]"] != null ? row["TEMF [mV]"].toFixed(3) : '—'}</TableCell>
+                      <TableCell>{row["Temp1 [oC]"] != null ? row["Temp1 [oC]"].toFixed(2) : '—'}</TableCell>
+                      <TableCell>{row["Temp2 [oC]"] != null ? row["Temp2 [oC]"].toFixed(2) : '—'}</TableCell>
+                      <TableCell>{row["Delta Temp [oC]"] != null ? row["Delta Temp [oC]"].toFixed(2) : '—'}</TableCell>
+                      <TableCell>{row["delta_T_over_T0"] != null ? row["delta_T_over_T0"].toFixed(4) : '—'}</TableCell>
+                      <TableCell>{row["T0 [oC]"] != null ? row["T0 [oC]"].toFixed(2) : '—'}</TableCell>
+                      <TableCell>{row["T0 [K]"] != null ? row["T0 [K]"].toFixed(2) : '—'}</TableCell>
+                      <TableCell>{row["S [µV/K]"] != null && row["S [µV/K]"] !== undefined ? row["S [µV/K]"]!.toFixed(2) : '—'}</TableCell>
                     </TableRow>
                   ))}
                 </TableBody>
               </Table>
             </TableContainer>
+            {analysis.length > 0 && (
+              <>
+                <Typography variant="subtitle1" sx={{ mt: 2 }}>Binned S (linear fit ΔV vs ΔT per T₀ bin)</Typography>
+                <TableContainer sx={{ maxHeight: 220, overflowY: 'auto' }}>
+                  <Table size="small">
+                    <TableHead>
+                      <TableRow>
+                        <TableCell>T₀ center [K]</TableCell>
+                        <TableCell>T₀ range [K]</TableCell>
+                        <TableCell>S [µV/K]</TableCell>
+                        <TableCell>± uncertainty</TableCell>
+                        <TableCell>n</TableCell>
+                      </TableRow>
+                    </TableHead>
+                    <TableBody>
+                      {analysis.map((r, idx) => (
+                        <TableRow key={idx}>
+                          <TableCell>{r.T0_center_K}</TableCell>
+                          <TableCell>{r.T0_min_K}–{r.T0_max_K}</TableCell>
+                          <TableCell>{r.S_uV_per_K.toFixed(3)}</TableCell>
+                          <TableCell>{r.S_uncertainty_uV_per_K != null ? '±' + r.S_uncertainty_uV_per_K.toFixed(3) : '—'}</TableCell>
+                          <TableCell>{r.n_points}</TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </TableContainer>
+              </>
+            )}
           </Paper>
         </Box>
       </Box>

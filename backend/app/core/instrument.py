@@ -139,9 +139,10 @@ class PK160:
         print("Initialized PK160")
         return True
     def set_current(self, value: float):
+        """Set current setpoint. Value in mA sent to ISET (current setpoint, not voltage)."""
         if not self.connected:
             return False
-        self.instrument.write(f"#1 ISET{value}")
+        self.instrument.write(f"#1 ISET {value}")
         logger.info(f"PK160 set current: {value}")
         print(f"PK160 set current: {value}")
         return True
@@ -218,7 +219,7 @@ class Keithley2700:
             if not self.connected:
                 return None
             self.instrument.write(f":ROUT:CLOS (@{channel})")
-            time.sleep(0.1)
+            time.sleep(0.05)  # reduced from 0.1 s to improve V–T correspondence (staggered acquisition error)
             response = self.instrument.query(":READ?")
             value_str = response.split(',')[0].split('_')[0].strip()
             value = float(value_str)
@@ -451,6 +452,7 @@ class SeebeckSystem:
         self.pk160 = PK160()
         self.k2401 = Keithley2401()
         self.connected = False
+        self.pk160_current_unit = "mA"  # UI and params in mA; if "A", we convert when sending to PK160
     def connect_all(self):
         """Connect to all instruments. Returns True only if all connections succeed."""
         results = {
@@ -485,13 +487,17 @@ class SeebeckSystem:
         self.k2700.configure_measurement()
         self.pk160.initialize()
     def set_current(self, value: float):
-        self.pk160.set_current(value)
+        # value is current in mA or A per pk160_current_unit. PK160 ISET expects current in mA (sending 200 = 200 mA).
+        # If we sent Amps (0.2) the supply would set 0.2 mA and temperature would not rise.
+        unit = getattr(self, "pk160_current_unit", "mA")
+        send_value_mA = (value * 1000.0) if unit == "A" else value
+        self.pk160.set_current(send_value_mA)
     def output_off(self):
         self.pk160.output_off()
     def measure_all(self, temp1_channel=102, temp2_channel=104) -> Dict[str, Optional[float]]:
-        # Measure voltage (TEMF)
+        # Acquisition order: V then T1 then T2 (staggered). For best accuracy, V and T
+        # should be simultaneous; staggered acquisition can introduce several-% error in S.
         temf = self.k2182a.read_voltage()
-        # Measure temperatures
         temp1 = self.k2700.take_measurement(channel=temp1_channel)
         temp2 = self.k2700.take_measurement(channel=temp2_channel)
         return {

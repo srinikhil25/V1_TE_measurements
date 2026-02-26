@@ -17,18 +17,20 @@ interface MeasurementDiagramFormProps {
   setIntervalVal: (v: number) => void;
   preTime: number;
   setPreTime: (v: number) => void;
-  startVolt: number;
-  setStartVolt: (v: number) => void;
-  stopVolt: number;
-  setStopVolt: (v: number) => void;
-  incRate: number;
-  setIncRate: (v: number) => void;
-  decRate: number;
-  setDecRate: (v: number) => void;
+  startVolt: string;
+  setStartVolt: (v: string) => void;
+  stopVolt: string;
+  setStopVolt: (v: string) => void;
+  incRate: string;
+  setIncRate: (v: string) => void;
+  decRate: string;
+  setDecRate: (v: string) => void;
   holdTime: number;
   setHoldTime: (v: number) => void;
   fileName: string;
   setFileName: (v: string) => void;
+  /** Current unit for setpoints (I₀, I); rate is shown as this unit + "/s" (e.g. mA/s or A/s). */
+  currentUnit?: 'mA' | 'A';
 }
 
 const MeasurementDiagramForm: React.FC<MeasurementDiagramFormProps> = ({
@@ -40,7 +42,9 @@ const MeasurementDiagramForm: React.FC<MeasurementDiagramFormProps> = ({
   decRate, setDecRate,
   holdTime, setHoldTime,
   fileName, setFileName,
+  currentUnit = 'mA',
 }) => {
+  const rateUnit = currentUnit === 'A' ? 'A/s' : 'mA/s';
   return (
     <Box sx={{ width: '100%', maxWidth: 500, mx: 'auto', mb: 3 }}>
       {/* Move Measurement Interval label and input above the diagram, centered */}
@@ -94,20 +98,20 @@ const MeasurementDiagramForm: React.FC<MeasurementDiagramFormProps> = ({
           <foreignObject x={40} y={180} width={32} height={28}>
             <TextField
               value={startVolt}
-              onChange={e => setStartVolt(Number(e.target.value))}
+              onChange={e => setStartVolt(e.target.value)}
               variant="outlined"
               size="small"
-              inputProps={{ style: { background: '#ffff99', textAlign: 'center', width: 28, color: 'black' } }}
+              inputProps={{ style: { background: '#ffff99', textAlign: 'center', width: 28, color: 'black' }, inputMode: 'decimal', step: 'any' }}
             />
           </foreignObject>
           {/* Top-left y-axis value box and label (moved here) */}
           <foreignObject x={30} y={60} width={32} height={28}>
             <TextField
               value={stopVolt}
-              onChange={e => setStopVolt(Number(e.target.value))}
+              onChange={e => setStopVolt(e.target.value)}
               variant="outlined"
               size="small"
-              inputProps={{ style: { background: '#ffff99', textAlign: 'center', width: 28, color: 'black' } }}
+              inputProps={{ style: { background: '#ffff99', textAlign: 'center', width: 28, color: 'black' }, inputMode: 'decimal', step: 'any' }}
             />
           </foreignObject>
           <text x={65} y={75} fontSize={14}>I</text>
@@ -128,25 +132,25 @@ const MeasurementDiagramForm: React.FC<MeasurementDiagramFormProps> = ({
           <foreignObject x={180} y={160} width={48} height={28}>
             <TextField
               value={incRate}
-              onChange={e => setIncRate(Number(e.target.value))}
+              onChange={e => setIncRate(e.target.value)}
               variant="outlined"
               size="small"
-              inputProps={{ style: { background: '#ffff99', textAlign: 'center', width: 40, color: 'black' } }}
+              inputProps={{ style: { background: '#ffff99', textAlign: 'center', width: 40, color: 'black' }, inputMode: 'decimal', step: 'any' }}
             />
           </foreignObject>
-          <text x={230} y={180} fontSize={14}>mA/s</text>
+          <text x={230} y={180} fontSize={14}>{rateUnit}</text>
           {/* Dec. Rate label and box */}
           <text x={320} y={150} fontSize={14}>Dec. Rate</text>
           <foreignObject x={320} y={160} width={48} height={28}>
             <TextField
               value={decRate}
-              onChange={e => setDecRate(Number(e.target.value))}
+              onChange={e => setDecRate(e.target.value)}
               variant="outlined"
               size="small"
-              inputProps={{ style: { background: '#ffff99', textAlign: 'center', width: 40, color: 'black' } }}
+              inputProps={{ style: { background: '#ffff99', textAlign: 'center', width: 40, color: 'black' }, inputMode: 'decimal', step: 'any' }}
             />
           </foreignObject>
-          <text x={370} y={180} fontSize={14}>mA/s</text>
+          <text x={370} y={180} fontSize={14}>{rateUnit}</text>
           {/* SVG arrow marker */}
           <defs>
             <marker id="arrow" markerWidth="10" markerHeight="10" refX="10" refY="5" orient="auto" markerUnits="strokeWidth">

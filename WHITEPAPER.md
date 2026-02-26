@@ -28,13 +28,17 @@ Provide a unified software stack to automate Seebeck and I‑V characterization 
 ## 5. Algorithms
 ### 5.1 Seebeck Measurement Loop (session)
 Inputs: interval, pre_time, start_volt, stop_volt, inc_rate, dec_rate, hold_time.
+
+- **Parameter semantics**: The UI labels show current (I₀, I, Inc./Dec. Rate in mA/s); the API uses `start_volt`/`stop_volt`/`inc_rate`/`dec_rate` as the numeric setpoints sent to the PK160 current supply (ISET). So “volt” in the API names is legacy; values are current setpoints.
+- **Validation** (backend and frontend): `interval` > 0; `pre_time`, `hold_time` ≥ 0; `inc_rate`, `dec_rate` > 0; `start_volt` ≤ `stop_volt`. Ramp step counts are capped so the setpoint does not overshoot (ramp-up) or undershoot (ramp-down) the target.
+
 Procedure:
 1) Connect all instruments (2182A, 2700, PK160); init 2700 channels and PK160.
 2) Compute segment counts (pre, ramp-up, hold, ramp-down) based on interval and rates.
 3) Loop over steps:
    - Set current via PK160 per step profile.
    - Measure TEMF (mV) via 2182A; measure temperatures (Temp1, Temp2) via 2700.
-   - Compute ΔT = Temp1 − Temp2; record (time, TEMF, Temp1, Temp2, ΔT).
+   - Compute ΔT = Temp2 − Temp1 (hot minus cold); average temperature T₀ = (Temp1 + Temp2)/2; Seebeck coefficient S = ΔV/ΔT (µV/K) when |ΔT| is above threshold; record (time, TEMF, Temp1, Temp2, ΔT, T₀, S).
    - Wait remaining time in interval.
 4) Stop conditions: end of programmed steps or user stop or instrument error.
 5) On completion/stop: output_off (PK160), disconnect_all.
@@ -73,19 +77,25 @@ Procedure:
   - Export: Excel with data + embedded screenshots of both charts (I‑V, R‑V).
   - Filename field; “Save (data + graphs)” triggers Excel export.
 
-## 8. Safety & Reliability Considerations
+## 8. Standards Alignment (Seebeck)
+- **Inputs**: Heater/current profile (pre, ramp-up, hold, ramp-down), interval; optional metadata (sample ID, operator, notes, target T₀, probe arrangement); optional cooling target (°C), cooling timeout, stabilization delay; PK160 unit (mA/A). Validated before run.
+- **Acquisition**: Order V → T₁ → T₂ with reduced delay (0.05 s); simultaneous would improve accuracy per NIST. PK160 current: if unit A, value sent as value/1000.
+- **Outputs**: Time, TEMF, Temp1, Temp2, ΔT, ΔT/T₀, T₀, S (µV/K), branch; binned S (linear fit ΔV vs ΔT per T₀ bin) with uncertainty; warning when ΔT/T₀ > 0.1. Export: metadata block, all columns, binned S sheet.
+- **ΔT**: Convention ΔT = Temp2 − Temp1 (hot minus cold). Cooling tail runs until |ΔT| < target (default 5 °C) or timeout.
+
+## 9. Safety & Reliability Considerations
 - Limits: current_limit and voltage_limit enforced in 2401 config.
 - Guard zero/near-zero current when computing resistance to avoid division blow-ups.
 - try/finally ensures outputs off and disconnect_all on errors.
 - Address detection: use `find_instruments.py` to align code with actual GPIB addresses.
 
-## 9. Common Failure Modes & Remedies
+## 10. Common Failure Modes & Remedies
 - VI_ERROR_ALLOC: another process holding VISA; close LabVIEW/visa32, power-cycle instruments, run `check_instruments.py` or `fix_instrument_locks.py`.
 - 404 from frontend: ensure `VITE_API_BASE_URL` ends with `/api` and routes use `/seebeck/...` or `/iv/run` (avoid `/api/api`).
 - Charts missing in export: ensure charts are rendered/visible before saving.
 - CORS: backend allows `http://localhost:5173` for dev; keep same host/port or update CORS if changed.
 
-## 10. Deployment / Run Steps (summary)
+## 11. Deployment / Run Steps (summary)
 Backend:
 ```bash
 cd backend
@@ -102,12 +112,12 @@ echo VITE_API_BASE_URL=http://localhost:8080/api > .env
 npm run dev   # http://localhost:5173
 ```
 
-## 11. Extensibility
+## 12. Extensibility
 - Add more instrument profiles by extending `core/instrument.py` and wiring new routes.
 - Additional exports (PDF) could reuse html2canvas output.
 - More sweep profiles (log steps, bipolar, pulsed) can be added in `/iv/run` logic.
 
-## 12. For Non‑Technical Readers — How to Operate
+## 13. For Non‑Technical Readers — How to Operate
 1) Start backend, then frontend; open `http://localhost:5173`.
 2) Check instruments are powered and addresses match discovery.
 3) For Seebeck: set parameters, click Start, watch graphs; Stop when done.
