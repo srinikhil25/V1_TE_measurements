@@ -21,12 +21,13 @@ import {
 } from 'recharts';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { instrumentApi, type MeasurementData, type MeasurementConfig } from '../api/client';
+import { getWsBase } from '../api/config';
 
 const IRStreamPanel = () => {
   const [imgSrc, setImgSrc] = useState('');
 
   useEffect(() => {
-    const ws = new WebSocket('ws://localhost:8080/api/ir_camera/ws');
+    const ws = new WebSocket(`${getWsBase()}/ir_camera/ws`);
     ws.onmessage = (event) => {
       setImgSrc('data:image/jpeg;base64,' + event.data);
     };
@@ -127,16 +128,7 @@ const MeasurementPanel = () => {
 
   // WebSocket connection for real-time updates
   useEffect(() => {
-    let wsUrl;
-    if (import.meta.env.VITE_WS_BASE_URL) {
-      wsUrl = `${import.meta.env.VITE_WS_BASE_URL}/instrument/ws`;
-    } else if (window.location.port === "5173") {
-      wsUrl = "ws://localhost:8080/api/instrument/ws";
-    } else {
-      const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      wsUrl = `${wsProtocol}//${window.location.host}/api/instrument/ws`;
-    }
-    const ws = new WebSocket(wsUrl);
+    const ws = new WebSocket(`${getWsBase()}/instrument/ws`);
     
     ws.onmessage = (event) => {
       const data = JSON.parse(event.data);

@@ -10,6 +10,7 @@ import MeasurementDiagramForm from './MeasurementDiagramForm';
 import html2canvas from 'html2canvas';
 import ExcelJS from 'exceljs';
 import { saveAs } from 'file-saver';
+import { getWsBase } from '../api/config';
 
 interface DataRow {
   "Time [s]": number;
@@ -113,17 +114,9 @@ const IRStreamPanel: React.FC<IRStreamPanelProps> = ({ enabled }) => {
 
     const connect = () => {
       if (!enabled) return; // Don't connect if disabled
-      
-      let wsUrl;
-      if (import.meta.env.VITE_WS_BASE_URL) {
-        wsUrl = `${import.meta.env.VITE_WS_BASE_URL}/ir_camera/ws`;
-      } else if (window.location.port === "5173") {
-        wsUrl = "ws://localhost:8080/api/ir_camera/ws";
-      } else {
-        const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        wsUrl = `${wsProtocol}//${window.location.host}/api/ir_camera/ws`;
-      }
-      
+
+      const wsUrl = `${getWsBase()}/ir_camera/ws`;
+
       setConnectionStatus('connecting');
       ws = new WebSocket(wsUrl);
       wsRef.current = ws;
