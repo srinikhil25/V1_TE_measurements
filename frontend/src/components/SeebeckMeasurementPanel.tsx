@@ -502,54 +502,126 @@ const SeebeckMeasurementPanel: React.FC = () => {
   };
 
   const handleDownloadExcelWithGraph = async () => {
-    if (!liveGraphRef.current) {
-      alert('Live Graph is not rendered yet.');
+    // Require that key graphs are rendered before exporting
+    if (!liveGraphRef.current || !deltaGraphRef.current) {
+      alert('Graphs are not rendered yet.');
       return;
     }
-    const canvas = await html2canvas(liveGraphRef.current, { backgroundColor: null });
-    const imgData = canvas.toDataURL('image/png');
+
+    // Capture all three graphs as PNG (live, TEMF vs ΔT, Seebeck vs T₀)
+    const [liveCanvas, deltaCanvas, seebeckCanvas] = await Promise.all([
+      html2canvas(liveGraphRef.current, { backgroundColor: '#ffffff' }),
+      html2canvas(deltaGraphRef.current, { backgroundColor: '#ffffff' }),
+      seebeckGraphRef.current
+        ? html2canvas(seebeckGraphRef.current, { backgroundColor: '#ffffff' })
+        : Promise.resolve(null as HTMLCanvasElement | null),
+    ]);
+
+    const liveImgData = liveCanvas.toDataURL('image/png');
+    const deltaImgData = deltaCanvas.toDataURL('image/png');
+    const seebeckImgData = seebeckCanvas ? seebeckCanvas.toDataURL('image/png') : null;
+
     const workbook = new ExcelJS.Workbook();
     const sheet = workbook.addWorksheet('Data');
-    // Add header
+
     const safeData = Array.isArray(data) ? data : [];
     const safeAnalysis = Array.isArray(analysis) ? analysis : [];
-    // Metadata block at top
-    sheet.addRow(["Metadata"]);
-    if (metadata?.sample_id) sheet.addRow(["Sample ID", metadata.sample_id]);
-    if (metadata?.operator) sheet.addRow(["Operator", metadata.operator]);
-    if (metadata?.target_T0_K != null) sheet.addRow(["Target T₀ (K)", metadata.target_T0_K]);
-    if (metadata?.probe_arrangement) sheet.addRow(["Probe arrangement", metadata.probe_arrangement]);
-    if (metadata?.notes) sheet.addRow(["Notes", metadata.notes]);
+
+    // Metadata block at top (session metadata + key measurement parameters)
+    sheet.addRow(['Metadata']);
+    let metaRowCount = 1;
+    if (metadata?.sample_id) {
+      sheet.addRow(['Sample ID', metadata.sample_id]);
+      metaRowCount += 1;
+    }
+    if (metadata?.operator) {
+      sheet.addRow(['Operator', metadata.operator]);
+      metaRowCount += 1;
+    }
+    if (metadata?.target_T0_K != null) {
+      sheet.addRow(['Target T₀ (K)', metadata.target_T0_K]);
+      metaRowCount += 1;
+    }
+    if (metadata?.probe_arrangement) {
+      sheet.addRow(['Probe arrangement', metadata.probe_arrangement]);
+      metaRowCount += 1;
+    }
+    if (metadata?.notes) {
+      sheet.addRow(['Notes', metadata.notes]);
+      metaRowCount += 1;
+    }
+
+    // Additional measurement parameters from the current UI state
+    sheet.addRow(['Interval (s)', interval]);
+    sheet.addRow(['Pre time (s)', preTime]);
+    sheet.addRow(['Hold time (s)', holdTime]);
+    sheet.addRow(['Start current I₀', `${startVolt} ${pk160Unit}`]);
+    sheet.addRow(['Stop current I', `${stopVolt} ${pk160Unit}`]);
+    sheet.addRow(['Inc. rate', `${incRate} ${pk160Unit}/s`]);
+    sheet.addRow(['Dec. rate', `${decRate} ${pk160Unit}/s`]);
+    sheet.addRow(['Cooling target ΔT (°C)', coolingTargetDeltaT]);
+    sheet.addRow(['Cooling timeout (s)', coolingTimeoutMin * 60]);
+    sheet.addRow(['Stabilization delay (s)', stabilizationDelayS]);
+    metaRowCount += 10;
+
     sheet.addRow([]);
-    sheet.addRow(["Time [s]", "TEMF [mV]", "Temp1 [oC]", "Temp2 [oC]", "Delta Temp [°C]", "T0 [°C]", "T0 [K]", "ΔT/T₀", "S [µV/K]"]);
+    sheet.addRow([
+      'Time [s]',
+      'TEMF [mV]',
+      'Temp1 [oC]',
+      'Temp2 [oC]',
+      'Delta Temp [°C]',
+      'T0 [°C]',
+      'T0 [K]',
+      'ΔT/T₀',
+      'S [µV/K]',
+    ]);
+
     safeData.forEach(row => {
       sheet.addRow([
-        row["Time [s]"],
-        row["TEMF [mV]"],
-        row["Temp1 [oC]"],
-        row["Temp2 [oC]"],
-        row["Delta Temp [oC]"],
-        row["T0 [oC]"],
-        row["T0 [K]"],
-        row["delta_T_over_T0"] != null ? row["delta_T_over_T0"] : "",
-        row["S [µV/K]"] != null ? row["S [µV/K]"] : ""
+        row['Time [s]'],
+        row['TEMF [mV]'],
+        row['Temp1 [oC]'],
+        row['Temp2 [oC]'],
+        row['Delta Temp [oC]'],
+        row['T0 [oC]'],
+        row['T0 [K]'],
+        row['delta_T_over_T0'] != null ? row['delta_T_over_T0'] : '',
+        row['S [µV/K]'] != null ? row['S [µV/K]'] : '',
       ]);
     });
-    const metaRows = [metadata?.sample_id, metadata?.operator, metadata?.target_T0_K != null, metadata?.probe_arrangement, metadata?.notes].filter(Boolean).length;
-    const imageId = workbook.addImage({ base64: imgData, extension: 'png' });
-    const imgRow = 1 + metaRows + 1 + 1 + safeData.length + 2;
-    sheet.addImage(imageId, {
-      tl: { col: 0, row: imgRow },
-      ext: { width: 600, height: 300 }
+
+    // Place all three graphs below the data table on the same sheet
+    const firstImageRow = metaRowCount + 2 + safeData.length + 2;
+    const liveImageId = workbook.addImage({ base64: liveImgData, extension: 'png' });
+    sheet.addImage(liveImageId, {
+      tl: { col: 0, row: firstImageRow },
+      ext: { width: 600, height: 300 },
     });
+
+    const deltaImageId = workbook.addImage({ base64: deltaImgData, extension: 'png' });
+    sheet.addImage(deltaImageId, {
+      tl: { col: 0, row: firstImageRow + 22 },
+      ext: { width: 600, height: 300 },
+    });
+
+    if (seebeckImgData) {
+      const seebeckImageId = workbook.addImage({ base64: seebeckImgData, extension: 'png' });
+      sheet.addImage(seebeckImageId, {
+        tl: { col: 0, row: firstImageRow + 44 },
+        ext: { width: 600, height: 300 },
+      });
+    }
+
     // Binned S (fit) sheet
     if (safeAnalysis.length > 0) {
       const sheetFit = workbook.addWorksheet('Binned S (fit)');
-      sheetFit.addRow(["T0_center_K", "T0_min_K", "T0_max_K", "S [µV/K]", "S uncertainty [µV/K]", "n_points"]);
+      sheetFit.addRow(['T0_center_K', 'T0_min_K', 'T0_max_K', 'S [µV/K]', 'S uncertainty [µV/K]', 'n_points']);
       safeAnalysis.forEach(r => {
-        sheetFit.addRow([r.T0_center_K, r.T0_min_K, r.T0_max_K, r.S_uV_per_K, r.S_uncertainty_uV_per_K ?? "", r.n_points]);
+        sheetFit.addRow([r.T0_center_K, r.T0_min_K, r.T0_max_K, r.S_uV_per_K, r.S_uncertainty_uV_per_K ?? '', r.n_points]);
       });
     }
+
     const buffer = await workbook.xlsx.writeBuffer();
     saveAs(new Blob([buffer]), 'data_sheet.xlsx');
   };

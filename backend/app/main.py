@@ -17,14 +17,14 @@ app = FastAPI(
     version="1.0.0"
 )
 
-# Configure CORS - More permissive for development
+# Configure CORS - Allow localhost, Firebase, Cloudflare Tunnel, and remote hosts (e.g. Tailscale)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "https://seebeck-web.web.app",
         "http://localhost:5173",
     ],
-    allow_origin_regex=r"https://.*\.trycloudflare\.com",
+    allow_origin_regex=r"https://.*\.trycloudflare\.com|http(s)?://[^/]+",
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
     allow_headers=["*"],

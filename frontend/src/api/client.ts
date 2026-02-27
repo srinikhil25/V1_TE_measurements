@@ -1,6 +1,5 @@
 import axios from 'axios';
-
-const VITE_API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || '/api').replace(/\/$/, '');
+import { getApiBase } from './config';
 
 export interface MeasurementConfig {
   channel: number;
@@ -21,7 +20,7 @@ export interface InstrumentStatus {
 }
 
 const api = axios.create({
-  baseURL: VITE_API_BASE_URL,
+  baseURL: getApiBase(),
   headers: {
     'Content-Type': 'application/json',
   },

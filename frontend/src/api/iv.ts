@@ -20,10 +20,10 @@ export interface IVPoint {
   conductivity?: number | null;
 }
 
-const VITE_API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api';
+import { getApiBase } from './config';
 
 const api = axios.create({
-  baseURL: VITE_API_BASE_URL,
+  baseURL: getApiBase(),
   headers: { 'Content-Type': 'application/json' },
   timeout: 20000,
 });
