@@ -773,7 +773,26 @@ const SeebeckMeasurementPanel: React.FC = () => {
                 </Button>
               )}
             </Box>
-            <IRStreamPanel enabled={irCameraEnabled} />
+            {irCameraEnabled ? (
+              <IRStreamPanel enabled={true} />
+            ) : (
+              <Box
+                sx={{
+                  width: '100%',
+                  height: 480,
+                  minHeight: 420,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  border: '1px dashed #ccc',
+                  borderRadius: 2,
+                  color: '#888',
+                  background: '#fafafa',
+                }}
+              >
+                IR camera disabled
+              </Box>
+            )}
           </Paper>
         </Box>
       </Box>
