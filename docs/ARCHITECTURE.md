@@ -361,21 +361,21 @@ sequenceDiagram
     RM-->>SYS: instrument handle
 
     SM->>SYS: initialize_all()
-    SYS->>K2182A: *RST; CONF:VOLT; VOLT:NPLC 5
-    SYS->>K2700: *RST; CONF:TEMP; TEMP:TRAN TC; TC:TYPE K
-    SYS->>PK160: REN; VCN 100; OCP 100; SW1
+    SYS->>K2182A: RST, CONF:VOLT, VOLT:NPLC 5
+    SYS->>K2700: RST, CONF:TEMP, TEMP:TRAN TC, TC:TYPE K
+    SYS->>PK160: REN, VCN 100, OCP 100, SW1
 
     loop Every interval (s)
         SM->>SYS: set_current(volt)
-        SYS->>PK160: #1 ISET {value}
+        SYS->>PK160: ISET {value}
         SM->>SYS: measure_all()
-        SYS->>K2182A: :READ?
+        SYS->>K2182A: READ?
         K2182A-->>SYS: TEMF (V)
-        SYS->>K2700: :ROUT:CLOS (@102); :READ?
+        SYS->>K2700: ROUT:CLOS(@102) then READ?
         K2700-->>SYS: Temp1 (°C)
-        SYS->>K2700: :ROUT:CLOS (@104); :READ?
+        SYS->>K2700: ROUT:CLOS(@104) then READ?
         K2700-->>SYS: Temp2 (°C)
-        SM->>SM: compute ΔT, S, append row
+        SM->>SM: compute delta-T, S, append row
     end
 
     SM->>SYS: output_off()
@@ -395,14 +395,14 @@ sequenceDiagram
     FE->>IV: POST /api/iv/run {params}
     IV->>SYS: connect_all()
     IV->>K2401: configure_voltage_source(v_limit, i_limit)
-    Note over K2401: *RST; SOUR:FUNC VOLT;\nSENS:CURR:PROT {limit};\nFORM:ELEM CURR,VOLT
+    Note over K2401: RST, set SOUR:FUNC VOLT, apply current protection limit
     IV->>K2401: output_on()
 
     loop For each voltage setpoint
         IV->>K2401: set_voltage(v)
-        IV->>K2401: INIT; FETCH?
+        IV->>K2401: INIT then FETCH?
         K2401-->>IV: measured (I, V)
-        IV->>IV: R = V/I;\nif dims: ρ = R·A/L
+        IV->>IV: R = V/I, compute resistivity if dims provided
     end
 
     IV->>K2401: output_off()
@@ -501,7 +501,7 @@ flowchart TD
     SESSION_MGR -->|"spawn thread"| THREAD["_run_session(params)\n(background thread)"]
 
     THREAD --> CONNECT["SeebeckSystem.connect_all()\nSeebeckSystem.initialize_all()"]
-    CONNECT --> LOOP_START{{"Loop\n(while session_active)"}}\
+    CONNECT --> LOOP_START{{"Loop\n(while session_active)"}}
 
     LOOP_START --> PHASE_CALC["Compute phase\n(pre / ramp_up / hold / ramp_down / cooling_tail)\nbased on kaisuu counter"]
     PHASE_CALC -->|"not cooling_tail"| SET_I["SeebeckSystem.set_current(volt)\n→ PK160 ISET"]
