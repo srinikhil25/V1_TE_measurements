@@ -229,7 +229,13 @@ class IrCameraWidget(QFrame):
             self._scale_max.setText("—")
         else:
             if svc.connect():
-                self._set_status(connected=True)
+                backend = svc.backend or ""
+                label = {
+                    "otc":        "OTC SDK",
+                    "legacy":     "Legacy SDK",
+                    "simulation": "Simulation",
+                }.get(backend, backend)
+                self._set_status(connected=True, label=label)
                 self._timer.start()
             else:
                 self._status_lbl.setText("Connection failed")
@@ -276,10 +282,10 @@ class IrCameraWidget(QFrame):
         for lbl in (self._val_min, self._val_ctr, self._val_max):
             lbl.setText("—")
 
-    def _set_status(self, *, connected: bool) -> None:
+    def _set_status(self, *, connected: bool, label: str = "") -> None:
         if connected:
             self._dot.setStyleSheet(f"color: {SUCCESS}; font-size: 12px; padding: 0;")
-            self._status_lbl.setText("Connected")
+            self._status_lbl.setText(label if label else "Connected")
             self._status_lbl.setStyleSheet(f"color: {SUCCESS}; font-size: 11px;")
             self._apply_disconnect_style()
         else:

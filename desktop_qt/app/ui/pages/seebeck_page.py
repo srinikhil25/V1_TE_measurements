@@ -3,8 +3,13 @@ Seebeck Measurement page.
 
 Layout
 ──────
-Left (min 440 px)    Sample info card · Waveform diagram · Start / Stop bar
-Right (flex)         Phase badge · Temperature chart · TEMF chart · metric row
+Left (min 440 px)    Sample info · Waveform diagram · IR camera · Start/Stop bar
+Right (flex)         Phase badge
+                     Chart 1 — TEMF (left axis) + T₁/T₂ (right axis) vs Time
+                     Chart 2 — TEMF vs ΔT  (heating orange / cooling blue)
+                     Chart 3 — S [µV/K] vs T₀ [K]
+                     Metric cards
+                     Data table  (scrollable, updates live)
 """
 
 from typing import List, Dict, Optional
@@ -12,6 +17,7 @@ from typing import List, Dict, Optional
 from PyQt6.QtWidgets import (
     QWidget, QHBoxLayout, QVBoxLayout, QLabel, QPushButton,
     QFrame, QLineEdit, QScrollArea, QSplitter, QMessageBox,
+    QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView,
 )
 from PyQt6.QtCore import Qt, QTimer
 
@@ -20,8 +26,8 @@ import pyqtgraph as pg
 from ..theme import (
     CARD_BG, BORDER, CONTENT_BG, PRIMARY, PRIMARY_HOVER,
     TEXT_PRIMARY, TEXT_SECONDARY, TEXT_MUTED,
-    SUCCESS, SUCCESS_BG, WARNING, WARNING_BG,
-    ERROR, ERROR_BG, SIDEBAR_BG,
+    SUCCESS, SUCCESS_BG,
+    ERROR, ERROR_BG,
 )
 from ..widgets.waveform_widget import SeebeckWaveformWidget
 from ..widgets.ir_camera_widget import IrCameraWidget
@@ -40,6 +46,18 @@ PHASE_STYLE = {
     "error":        (ERROR_BG,  ERROR,      "ERROR"),
 }
 
+# Data-table column definitions  (data-dict key, display header, format string)
+_TABLE_COLS: List[tuple] = [
+    ("Time [s]",        "Time [s]",   "{:.1f}"),
+    ("TEMF [mV]",       "TEMF [mV]",  "{:.3f}"),
+    ("Temp1 [oC]",      "T₁ [°C]",   "{:.2f}"),
+    ("Temp2 [oC]",      "T₂ [°C]",   "{:.2f}"),
+    ("Delta Temp [oC]", "ΔT [°C]",   "{:.2f}"),
+    ("delta_T_over_T0", "ΔT/T₀",     "{:.4f}"),
+    ("T0 [oC]",         "T₀ [°C]",   "{:.2f}"),
+    ("T0 [K]",          "T₀ [K]",    "{:.2f}"),
+    ("S [µV/K]",        "S [µV/K]",  "{:.2f}"),
+]
 
 # ---------------------------------------------------------------------------
 # Tiny helpers
@@ -72,7 +90,6 @@ def _card(padding=(16, 14, 16, 16)) -> tuple:
     v.setContentsMargins(*padding)
     v.setSpacing(10)
     return f, v
-
 
 
 def _row(label: str, widget: QWidget) -> QHBoxLayout:
@@ -135,6 +152,8 @@ class SeebeckPage(QWidget):
         super().__init__()
         self._user = user
         self._data: List[Dict] = []
+        self._analysis: List[Dict] = []
+        self._table_row_count: int = 0
         self._timer = QTimer()
         self._timer.setInterval(1000)
         self._timer.timeout.connect(self._poll)
@@ -160,11 +179,6 @@ class SeebeckPage(QWidget):
     # ── Left panel ──────────────────────────────────────────────────────
 
     def _build_left(self) -> QWidget:
-        """
-        Returns a container with:
-          - a scrollable form area (sample info + waveform diagram)
-          - Start / Stop buttons pinned at the bottom, always visible
-        """
         container = QWidget()
         container.setMinimumWidth(440)
         container.setStyleSheet("background: transparent;")
@@ -172,7 +186,6 @@ class SeebeckPage(QWidget):
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
 
-        # ── Scrollable form ──────────────────────────────────────────────
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
@@ -183,8 +196,8 @@ class SeebeckPage(QWidget):
         panel = QWidget()
         panel.setStyleSheet("background: transparent;")
         v = QVBoxLayout(panel)
-        v.setContentsMargins(14, 14, 14, 10)
-        v.setSpacing(14)
+        v.setContentsMargins(16, 16, 16, 16)
+        v.setSpacing(18)
 
         # ── Sample info card ─────────────────────────────────────────────
         card, cl = _card()
@@ -219,7 +232,7 @@ class SeebeckPage(QWidget):
         scroll.setWidget(panel)
         outer.addWidget(scroll, stretch=1)
 
-        # ── Pinned Start / Stop bar (always visible) ─────────────────────
+        # ── Pinned Start / Stop bar ───────────────────────────────────────
         btn_bar = QWidget()
         btn_bar.setFixedHeight(60)
         btn_bar.setStyleSheet(
@@ -259,13 +272,21 @@ class SeebeckPage(QWidget):
     # ── Right panel ─────────────────────────────────────────────────────
 
     def _build_right(self) -> QWidget:
+        # Outer scroll area — lets the chart stack + table breathe freely
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setStyleSheet(
+            "QScrollArea { background: transparent; border: none; }"
+        )
+
         panel = QWidget()
         panel.setStyleSheet(f"background: {CONTENT_BG};")
         v = QVBoxLayout(panel)
-        v.setContentsMargins(14, 14, 14, 14)
-        v.setSpacing(10)
+        v.setContentsMargins(20, 20, 20, 20)
+        v.setSpacing(18)
 
-        # Phase badge + step label
+        # ── Phase badge + step label ─────────────────────────────────────
         top_row = QHBoxLayout()
         top_row.setSpacing(12)
 
@@ -283,37 +304,40 @@ class SeebeckPage(QWidget):
         top_row.addStretch()
         v.addLayout(top_row)
 
-        # ── Charts ──────────────────────────────────────────────────────
         pg.setConfigOptions(antialias=True)
 
-        # Temperature chart
-        self.chart_temp = pg.PlotWidget()
-        self._style_chart(self.chart_temp, "Temperature (°C)", "Time (s)")
-        self.chart_temp.setMenuEnabled(False)
-        legend = self.chart_temp.addLegend(offset=(10, 10))
-        self.curve_t1 = self.chart_temp.plot(
-            pen=pg.mkPen("#2563EB", width=2), name="T₁"
-        )
-        self.curve_t2 = self.chart_temp.plot(
-            pen=pg.mkPen("#DC2626", width=2), name="T₂"
-        )
-        # Disable auto-range — set sensible idle defaults
-        self.chart_temp.setXRange(0, 60, padding=0)
-        self.chart_temp.setYRange(0, 100, padding=0.05)
-        v.addWidget(self.chart_temp, stretch=3)
+        # ── Chart 1: TEMF (left) + T₁/T₂ (right) vs Time  [dual Y-axis] ─
+        v.addWidget(self._build_live_chart())
 
-        # TEMF chart
-        self.chart_temf = pg.PlotWidget()
-        self._style_chart(self.chart_temf, "TEMF (mV)", "Time (s)")
-        self.chart_temf.setMenuEnabled(False)
-        self.curve_temf = self.chart_temf.plot(
-            pen=pg.mkPen("#7C3AED", width=2)
+        # ── Chart 2: TEMF vs ΔT  (heating / cooling split) ───────────────
+        self.chart_temf_dt = pg.PlotWidget()
+        self._style_chart(self.chart_temf_dt, "TEMF (mV)", "ΔT (°C)")
+        self.chart_temf_dt.setMenuEnabled(False)
+        legend2 = self.chart_temf_dt.addLegend(offset=(10, 10))
+        self.curve_heat = self.chart_temf_dt.plot(
+            pen=pg.mkPen("#ED6C02", width=2), name="Heating"
         )
-        self.chart_temf.setXRange(0, 60, padding=0)
-        self.chart_temf.setYRange(-5, 5, padding=0.05)
-        v.addWidget(self.chart_temf, stretch=2)
+        self.curve_cool = self.chart_temf_dt.plot(
+            pen=pg.mkPen("#2563EB", width=2), name="Cooling"
+        )
+        self.chart_temf_dt.setXRange(0, 10, padding=0)
+        self.chart_temf_dt.setYRange(-5, 5, padding=0.05)
+        v.addWidget(self.chart_temf_dt)
 
-        # ── Metric cards ────────────────────────────────────────────────
+        # ── Chart 3: S [µV/K] vs T₀ [K] ────────────────────────────────
+        self.chart_s_t0 = pg.PlotWidget()
+        self._style_chart(self.chart_s_t0, "S (µV/K)", "T₀ (K)")
+        self.chart_s_t0.setMenuEnabled(False)
+        self.curve_s = self.chart_s_t0.plot(
+            pen=pg.mkPen("#9C27B0", width=2),
+            symbol="o", symbolSize=5,
+            symbolBrush="#9C27B0", symbolPen=None,
+        )
+        self.chart_s_t0.setXRange(200, 600, padding=0)
+        self.chart_s_t0.setYRange(-200, 200, padding=0.05)
+        v.addWidget(self.chart_s_t0)
+
+        # ── Metric cards ─────────────────────────────────────────────────
         metrics = QHBoxLayout()
         metrics.setSpacing(10)
         self.m_dt   = _MetricCard("ΔT",   "°C")
@@ -324,7 +348,97 @@ class SeebeckPage(QWidget):
             metrics.addWidget(m)
         v.addLayout(metrics)
 
-        return panel
+        # ── Data table ───────────────────────────────────────────────────
+        v.addWidget(self._build_data_table())
+
+        v.addStretch()
+        scroll.setWidget(panel)
+        return scroll
+
+    # ── Chart builders ───────────────────────────────────────────────────
+
+    def _build_live_chart(self) -> pg.PlotWidget:
+        """Chart 1: TEMF [mV] on the left axis, T₁/T₂ [°C] on the right axis,
+        both plotted against Time [s].  Uses a second ViewBox for the right axis."""
+        chart = pg.PlotWidget()
+        self._style_chart(chart, "TEMF (mV)", "Time (s)")
+        chart.setMenuEnabled(False)
+
+        pi = chart.getPlotItem()
+        pi.showAxis("right")
+        pi.setLabel("right", "Temperature (°C)")
+        pi.getAxis("right").setStyle(tickFont=pg.QtGui.QFont("Segoe UI", 9))
+
+        # Second ViewBox linked to the right axis
+        self._vb_temp = pg.ViewBox()
+        pi.scene().addItem(self._vb_temp)
+        pi.getAxis("right").linkToView(self._vb_temp)
+        self._vb_temp.setXLink(pi)
+
+        # TEMF on the main (left) axis
+        self.curve_temf = pi.plot(pen=pg.mkPen("#7C3AED", width=2))
+
+        # T₁ / T₂ on the right ViewBox
+        self.curve_t1 = pg.PlotCurveItem(pen=pg.mkPen("#2563EB", width=2))
+        self.curve_t2 = pg.PlotCurveItem(pen=pg.mkPen("#DC2626", width=2))
+        self._vb_temp.addItem(self.curve_t1)
+        self._vb_temp.addItem(self.curve_t2)
+
+        # Manual legend (ViewBox items aren't auto-registered)
+        legend = pg.LegendItem(offset=(10, 10))
+        legend.setParentItem(pi.graphicsItem())
+        legend.addItem(self.curve_temf, "TEMF [mV]")
+        legend.addItem(self.curve_t1,   "T₁ [°C]")
+        legend.addItem(self.curve_t2,   "T₂ [°C]")
+
+        # Keep right ViewBox geometry in sync with the main ViewBox
+        def _sync_views():
+            self._vb_temp.setGeometry(pi.vb.sceneBoundingRect())
+            self._vb_temp.linkedViewChanged(pi.vb, self._vb_temp.XAxis)
+
+        pi.vb.sigResized.connect(_sync_views)
+        _sync_views()
+
+        # Idle defaults
+        chart.setXRange(0, 60, padding=0)
+        chart.setYRange(-5, 5, padding=0.05)
+        self._vb_temp.setYRange(0, 100, padding=0.05)
+
+        self.chart_live = chart
+        return chart
+
+    def _build_data_table(self) -> QFrame:
+        """Compact scrollable data table card."""
+        card, cl = _card(padding=(10, 8, 10, 8))
+        cl.setSpacing(6)
+        cl.addWidget(_section("Data Table"))
+
+        headers = [col[1] for col in _TABLE_COLS]
+        self.tbl_data = QTableWidget(0, len(headers))
+        self.tbl_data.setHorizontalHeaderLabels(headers)
+        self.tbl_data.setMinimumHeight(300)
+        self.tbl_data.setEditTriggers(
+            QAbstractItemView.EditTrigger.NoEditTriggers
+        )
+        self.tbl_data.setSelectionBehavior(
+            QAbstractItemView.SelectionBehavior.SelectRows
+        )
+        self.tbl_data.setAlternatingRowColors(True)
+        self.tbl_data.verticalHeader().setVisible(False)
+        self.tbl_data.verticalHeader().setDefaultSectionSize(22)
+        self.tbl_data.horizontalHeader().setSectionResizeMode(
+            QHeaderView.ResizeMode.ResizeToContents
+        )
+        self.tbl_data.horizontalHeader().setStretchLastSection(True)
+        self.tbl_data.setVerticalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOn
+        )
+        self.tbl_data.setStyleSheet(
+            "QTableWidget { border: none; font-size: 11px; background: white; }"
+            "QTableWidget::item { padding: 1px 4px; }"
+        )
+        cl.addWidget(self.tbl_data)
+        return card
 
     # ------------------------------------------------------------------ helpers
 
@@ -336,7 +450,7 @@ class SeebeckPage(QWidget):
         chart.setLabel("bottom", xlabel)
         chart.getAxis("left").setStyle(tickFont=pg.QtGui.QFont("Segoe UI", 9))
         chart.getAxis("bottom").setStyle(tickFont=pg.QtGui.QFont("Segoe UI", 9))
-        chart.setMinimumHeight(180)
+        chart.setFixedHeight(320)
 
     # ------------------------------------------------------------------ controls
 
@@ -361,13 +475,23 @@ class SeebeckPage(QWidget):
             QMessageBox.critical(self, "Error", "Failed to start measurement.")
             return
 
-        # Reset charts to auto-range once real data arrives
+        # Reset all charts and table
         self._data.clear()
+        self._analysis.clear()
+        self._table_row_count = 0
+
+        self.curve_temf.setData([], [])
         self.curve_t1.setData([], [])
         self.curve_t2.setData([], [])
-        self.curve_temf.setData([], [])
-        self.chart_temp.enableAutoRange()
-        self.chart_temf.enableAutoRange()
+        self.curve_heat.setData([], [])
+        self.curve_cool.setData([], [])
+        self.curve_s.setData([], [])
+        self.tbl_data.setRowCount(0)
+
+        self.chart_live.enableAutoRange()
+        self._vb_temp.enableAutoRange()
+        self.chart_temf_dt.enableAutoRange()
+        self.chart_s_t0.enableAutoRange()
 
         self.btn_start.setEnabled(False)
         self.btn_stop.setEnabled(True)
@@ -407,24 +531,80 @@ class SeebeckPage(QWidget):
             self._data = new_data
             self._refresh_charts()
 
+        new_analysis = svc.get_analysis()
+        if new_analysis and len(new_analysis) != len(self._analysis):
+            self._analysis = new_analysis
+
+    # ------------------------------------------------------------------ refresh
+
     def _refresh_charts(self):
         if not self._data:
             return
-        times = [r.get("Time [s]", 0)   for r in self._data]
-        t1    = [r.get("Temp1 [oC]")    for r in self._data]
-        t2    = [r.get("Temp2 [oC]")    for r in self._data]
-        temf  = [r.get("TEMF [mV]")     for r in self._data]
 
         nan = float("nan")
-        self.curve_t1.setData(  times, [v if v is not None else nan for v in t1])
-        self.curve_t2.setData(  times, [v if v is not None else nan for v in t2])
-        self.curve_temf.setData(times, [v if v is not None else nan for v in temf])
 
+        def _v(lst):
+            return [x if x is not None else nan for x in lst]
+
+        times = [r.get("Time [s]", 0) for r in self._data]
+        t1    = [r.get("Temp1 [oC]") for r in self._data]
+        t2    = [r.get("Temp2 [oC]") for r in self._data]
+        temf  = [r.get("TEMF [mV]")  for r in self._data]
+
+        # ── Chart 1: live dual-axis ──────────────────────────────────────
+        self.curve_temf.setData(times, _v(temf))
+        self.curve_t1.setData(  times, _v(t1))
+        self.curve_t2.setData(  times, _v(t2))
+
+        # ── Chart 2: TEMF vs ΔT (heating / cooling split) ────────────────
+        def _xy(rows, key_x, key_y):
+            xs, ys = [], []
+            for r in rows:
+                x, y = r.get(key_x), r.get(key_y)
+                if x is not None and y is not None:
+                    xs.append(x)
+                    ys.append(y)
+            return xs, ys
+
+        heating = [r for r in self._data if r.get("branch") != "cooling"]
+        cooling = [r for r in self._data if r.get("branch") == "cooling"]
+        dt_h, tf_h = _xy(heating, "Delta Temp [oC]", "TEMF [mV]")
+        dt_c, tf_c = _xy(cooling, "Delta Temp [oC]", "TEMF [mV]")
+        self.curve_heat.setData(dt_h, tf_h)
+        self.curve_cool.setData(dt_c, tf_c)
+
+        # ── Chart 3: S vs T₀ ────────────────────────────────────────────
+        s_pairs = [
+            (r["T0 [K]"], r["S [µV/K]"])
+            for r in self._data
+            if r.get("T0 [K]") is not None and r.get("S [µV/K]") is not None
+        ]
+        if s_pairs:
+            t0v, sv = zip(*s_pairs)
+            self.curve_s.setData(list(t0v), list(sv))
+
+        # ── Metric cards ─────────────────────────────────────────────────
         last = self._data[-1]
         self.m_dt.update(  last.get("Delta Temp [oC]"))
-        self.m_t0.update(  last.get("T0 [K]"),  "{:.1f}")
-        self.m_temf.update(last.get("TEMF [mV]"), "{:.3f}")
-        self.m_s.update(   last.get("S [µV/K]"), "{:.1f}")
+        self.m_t0.update(  last.get("T0 [K]"),      "{:.1f}")
+        self.m_temf.update(last.get("TEMF [mV]"),   "{:.3f}")
+        self.m_s.update(   last.get("S [µV/K]"),    "{:.1f}")
+
+        # ── Data table — append only new rows ────────────────────────────
+        new_count = len(self._data)
+        if new_count > self._table_row_count:
+            self.tbl_data.setRowCount(new_count)
+            for i in range(self._table_row_count, new_count):
+                row = self._data[i]
+                for j, (key, _, fmt) in enumerate(_TABLE_COLS):
+                    val  = row.get(key)
+                    text = "—" if val is None else fmt.format(val)
+                    item = QTableWidgetItem(text)
+                    item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                    item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                    self.tbl_data.setItem(i, j, item)
+            self._table_row_count = new_count
+            self.tbl_data.scrollToBottom()
 
     def _apply_phase(self, phase: str):
         bg, color, label = PHASE_STYLE.get(

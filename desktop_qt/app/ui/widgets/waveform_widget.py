@@ -128,7 +128,7 @@ class SeebeckWaveformWidget(QWidget):
         # propagate the dark sidebar palette into the popup view.
         self.cb_unit.setStyleSheet(
             "QComboBox {"
-            "  background: white; color: #0F172A;"
+            "  background: #FFFFFF; color: #0F172A;"
             "  border: 1.5px solid #CBD5E1; border-radius: 5px;"
             "  padding: 3px 6px;"
             "}"
