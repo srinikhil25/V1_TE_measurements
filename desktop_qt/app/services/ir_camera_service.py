@@ -13,6 +13,7 @@ The Qt widget owns all false-colour rendering; no cv2/JPEG is needed here.
 
 from __future__ import annotations
 
+import os
 import threading
 from typing import Optional
 
@@ -57,9 +58,14 @@ class IrCameraService:
         """Attempt to open the camera. Returns True on success (any backend)."""
 
         # ── 1. OTC SDK ────────────────────────────────────────────────────
+        # Guard: only attempt if the SDK bindings directory actually exists.
+        # A missing SDK raises a clean ImportError; a present-but-broken SDK
+        # can segfault — so we check the path first.
         try:
-            from ..instruments.optris_otc import is_available, create_otc_camera_manager
-            if is_available():
+            from ..instruments.optris_otc import (
+                _BINDINGS_PATH, is_available, create_otc_camera_manager,
+            )
+            if os.path.isdir(_BINDINGS_PATH) and is_available():
                 client, imager, thread = create_otc_camera_manager(0)
                 self._otc_client = client
                 self._otc_imager = imager
@@ -72,18 +78,21 @@ class IrCameraService:
             pass
 
         # ── 2. Legacy pyOptris / IrDirectSDK ─────────────────────────────
+        # Guard: only attempt if the DLL file is physically present.
+        # Trying to load a missing DLL can hard-crash the process.
         try:
-            import pyOptris
-            pyOptris.load_DLL(_LEGACY_DLL)
-            pyOptris.usb_init(_LEGACY_CONFIG)
-            w, h = pyOptris.get_palette_image_size()
-            self._pyOptris   = pyOptris
-            self._py_w       = w
-            self._py_h       = h
-            self._backend    = self.BACKEND_LEGACY
-            self._connected  = True
-            self._tick       = 0
-            return True
+            if os.path.isfile(_LEGACY_DLL):
+                import pyOptris
+                pyOptris.load_DLL(_LEGACY_DLL)
+                pyOptris.usb_init(_LEGACY_CONFIG)
+                w, h = pyOptris.get_palette_image_size()
+                self._pyOptris   = pyOptris
+                self._py_w       = w
+                self._py_h       = h
+                self._backend    = self.BACKEND_LEGACY
+                self._connected  = True
+                self._tick       = 0
+                return True
         except Exception:
             pass
 

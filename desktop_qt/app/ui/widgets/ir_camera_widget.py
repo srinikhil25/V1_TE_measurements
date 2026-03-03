@@ -8,7 +8,7 @@ Min / Center / Max readings.
 from __future__ import annotations
 
 import numpy as np
-from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtCore import Qt, QTimer, QThread, pyqtSignal
 from PyQt6.QtGui import QImage, QPixmap
 from PyQt6.QtWidgets import (
     QFrame, QHBoxLayout, QLabel, QPushButton, QVBoxLayout,
@@ -16,7 +16,7 @@ from PyQt6.QtWidgets import (
 
 from ..theme import (
     BORDER, CARD_BG, ERROR, PRIMARY, PRIMARY_HOVER,
-    SUCCESS, TEXT_MUTED, TEXT_PRIMARY,
+    SUCCESS, WARNING, TEXT_MUTED, TEXT_PRIMARY,
 )
 
 # ---------------------------------------------------------------------------
@@ -102,6 +102,30 @@ def _reading_pair(title: str, value_color: str) -> tuple[QLabel, QFrame]:
 
 
 # ---------------------------------------------------------------------------
+# Background connection thread
+# ---------------------------------------------------------------------------
+
+class _ConnectThread(QThread):
+    """Runs IrCameraService.connect() off the UI thread.
+
+    SDK initialisation (OTC / pyOptris DLL loading) can block for several
+    seconds or hard-crash via C-level segfault if the camera is absent.
+    Running it here keeps the Qt event loop alive and isolates the crash
+    to this thread rather than killing the whole application.
+    """
+    finished = pyqtSignal(bool, str)   # (success, backend_name)
+
+    def run(self) -> None:
+        try:
+            from ...services.ir_camera_service import IrCameraService
+            svc = IrCameraService()
+            ok  = svc.connect()
+            self.finished.emit(ok, svc.backend or "")
+        except Exception:
+            self.finished.emit(False, "")
+
+
+# ---------------------------------------------------------------------------
 # IrCameraWidget
 # ---------------------------------------------------------------------------
 
@@ -124,6 +148,7 @@ class IrCameraWidget(QFrame):
         self._timer = QTimer(self)
         self._timer.setInterval(1000 // self._FPS)
         self._timer.timeout.connect(self._update_frame)
+        self._connect_thread: _ConnectThread | None = None
         self._build_ui()
 
     # ------------------------------------------------------------------ build
@@ -228,18 +253,32 @@ class IrCameraWidget(QFrame):
             self._scale_min.setText("—")
             self._scale_max.setText("—")
         else:
-            if svc.connect():
-                backend = svc.backend or ""
-                label = {
-                    "otc":        "OTC SDK",
-                    "legacy":     "Legacy SDK",
-                    "simulation": "Simulation",
-                }.get(backend, backend)
-                self._set_status(connected=True, label=label)
-                self._timer.start()
-            else:
-                self._status_lbl.setText("Connection failed")
-                self._status_lbl.setStyleSheet(f"color: {ERROR}; font-size: 11px;")
+            # Run SDK init off the UI thread — a missing camera can segfault
+            # the process if called directly here.
+            self._btn.setEnabled(False)
+            self._dot.setStyleSheet(f"color: {WARNING}; font-size: 12px; padding: 0;")
+            self._status_lbl.setText("Connecting…")
+            self._status_lbl.setStyleSheet(f"color: {WARNING}; font-size: 11px;")
+
+            self._connect_thread = _ConnectThread(self)
+            self._connect_thread.finished.connect(self._on_connect_result)
+            self._connect_thread.start()
+
+    def _on_connect_result(self, ok: bool, backend: str) -> None:
+        self._btn.setEnabled(True)
+        if ok:
+            label = {
+                "otc":        "OTC SDK",
+                "legacy":     "Legacy SDK",
+                "simulation": "Simulation",
+            }.get(backend, backend)
+            self._set_status(connected=True, label=label)
+            self._timer.start()
+        else:
+            self._dot.setStyleSheet(f"color: {ERROR}; font-size: 12px; padding: 0;")
+            self._status_lbl.setText("Connection failed")
+            self._status_lbl.setStyleSheet(f"color: {ERROR}; font-size: 11px;")
+            self._apply_connect_style()
 
     def _update_frame(self) -> None:
         from ...services.ir_camera_service import IrCameraService
