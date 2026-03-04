@@ -77,7 +77,7 @@ graph TB
         end
 
         subgraph DB["SQLite Database"]
-            DBFILE[\"te_measurement.db\n%APPDATA%\\TEMeasurement\\\"]
+            DBFILE["te_measurement.db\n%APPDATA%/TEMeasurement/"]
         end
 
     end
