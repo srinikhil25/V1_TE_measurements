@@ -42,9 +42,9 @@ from ..widgets.ir_camera_widget import IrCameraWidget
 # ---------------------------------------------------------------------------
 PHASE_STYLE = {
     "pre":          ("#FFF7ED", "#EA580C", "PRE-HEAT"),
-    "ramp_up":      ("#EEF2FF", "#4F46E5", "RAMP UP"),
+    "ramp_up":      ("#EEF2FF", "#4F46E5", "POWER UP"),
     "hold":         (SUCCESS_BG, SUCCESS,   "HOLD"),
-    "ramp_down":    ("#FFF7ED", "#EA580C",  "RAMP DOWN"),
+    "ramp_down":    ("#FFF7ED", "#EA580C",  "POWER DOWN"),
     "cooling_tail": ("#F0F9FF", "#0284C7",  "COOLING"),
     "idle":         ("#F8FAFC", TEXT_MUTED, "IDLE"),
     "finished":     (SUCCESS_BG, SUCCESS,   "FINISHED"),

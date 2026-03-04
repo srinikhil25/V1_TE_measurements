@@ -73,11 +73,11 @@ const MeasurementDiagramForm: React.FC<MeasurementDiagramFormProps> = ({
           <line x1={140} y1={200} x2={140} y2={220} stroke="#000" strokeWidth={2} />
           {/* Pre time dashed */}
           <line x1={140} y1={200} x2={140} y2={80} stroke="#000" strokeWidth={1} strokeDasharray="4 3" />
-          {/* Ramp up */}
+          {/* Power up ramp */}
           <polyline points="140,200 200,120 320,120" fill="none" stroke="#d32f2f" strokeWidth={2} />
           {/* Plateau */}
           <polyline points="320,120 400,120" fill="none" stroke="#d32f2f" strokeWidth={2} />
-          {/* Ramp down */}
+          {/* Power down ramp */}
           <polyline points="400,120 460,200" fill="none" stroke="#d32f2f" strokeWidth={2} />
           {/* Hold time arrow */}
           <line x1={340} y1={110} x2={390} y2={110} stroke="#d32f2f" strokeWidth={2} markerEnd="url(#arrow)" />

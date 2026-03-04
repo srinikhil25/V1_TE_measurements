@@ -114,12 +114,12 @@ class SeebeckWaveformWidget(QWidget):
 
         # ── Spinboxes ────────────────────────────────
         self.sb_interval = _isb(1,    60,    2)
-        self.sb_t_pre    = _isb(0,    3600,  60)
+        self.sb_t_pre    = _isb(0,    3600,  5)
         self.sb_i0       = _dsb(0,    2000,  0.0)
-        self.sb_ipeak    = _dsb(0.1,  2000,  200.0)
-        self.sb_inc      = _dsb(0.01, 200,   5.0, w=_SWL)
-        self.sb_dec      = _dsb(0.01, 200,   5.0, w=_SWL)
-        self.sb_t_hold   = _isb(0,    3600,  200)
+        self.sb_ipeak    = _dsb(0.1,  2000,  1.0)
+        self.sb_inc      = _dsb(0.01, 200,   1.0, w=_SWL)
+        self.sb_dec      = _dsb(0.01, 200,   1.0, w=_SWL)
+        self.sb_t_hold   = _isb(0,    3600,  600)
 
         self.cb_unit = QComboBox(self)
         self.cb_unit.addItems(["mA", "A"])

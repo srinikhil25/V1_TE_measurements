@@ -278,12 +278,12 @@ const IRStreamPanel: React.FC<IRStreamPanelProps> = ({ enabled }) => {
 
 const SeebeckMeasurementPanel: React.FC = () => {
   const [interval, setIntervalVal] = useState(2);
-  const [preTime, setPreTime] = useState(1);
-  const [startVolt, setStartVolt] = useState('0');
-  const [stopVolt, setStopVolt] = useState('1');
-  const [incRate, setIncRate] = useState('1');
-  const [decRate, setDecRate] = useState('1');
-  const [holdTime, setHoldTime] = useState(600);
+  const [preTime, setPreTime] = useState(5);      // t_pre default: 5 s
+  const [startVolt, setStartVolt] = useState('0'); // I0 default: 0.0
+  const [stopVolt, setStopVolt] = useState('1');   // Ipeak default: 1.0
+  const [incRate, setIncRate] = useState('1');     // Inc rate: 1.0 mA/s
+  const [decRate, setDecRate] = useState('1');     // Dec rate: 1.0 mA/s
+  const [holdTime, setHoldTime] = useState(600);   // t_hold: 600 s
   const [fileName, setFileName] = useState('seebeck_results.csv');
   const [sampleId, setSampleId] = useState('');
   const [operator, setOperator] = useState('');
@@ -739,7 +739,17 @@ const SeebeckMeasurementPanel: React.FC = () => {
                   <> • Total run ~{status.estimated_total_s} s (hold at peak: {status.hold_time_s} s only)</>
                 )}
                 {status.phase != null && (
-                  <> • Phase: <strong>{status.phase === 'ramp_up' ? 'Ramp up' : status.phase === 'hold' ? 'Hold' : status.phase === 'ramp_down' ? 'Ramp down' : status.phase === 'cooling_tail' ? 'Cooling (ΔT→0)' : status.phase}</strong></>
+                  <> • Phase: <strong>
+                    {status.phase === 'ramp_up'
+                      ? 'Power up'
+                      : status.phase === 'hold'
+                      ? 'Hold'
+                      : status.phase === 'ramp_down'
+                      ? 'Power down'
+                      : status.phase === 'cooling_tail'
+                      ? 'Cooling (ΔT→0)'
+                      : status.phase}
+                  </strong></>
                 )}
                 {status.step != null && status.total_steps != null && (
                   <> • Step {status.step}/{status.total_steps}</>
