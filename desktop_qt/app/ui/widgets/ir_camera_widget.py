@@ -9,7 +9,10 @@ from __future__ import annotations
 import numpy as np
 from PyQt6.QtCore import Qt, QTimer, QThread, pyqtSignal
 from PyQt6.QtGui import QImage, QPixmap
-from PyQt6.QtWidgets import QFrame, QHBoxLayout, QLabel, QPushButton, QVBoxLayout
+from PyQt6.QtWidgets import (
+    QFrame, QHBoxLayout, QLabel, QPushButton, QVBoxLayout,
+    QFileDialog, QMessageBox,
+)
 
 from ..theme import BORDER, CARD_BG, ERROR, PRIMARY, PRIMARY_HOVER, SUCCESS, WARNING, TEXT_MUTED, TEXT_PRIMARY
 
@@ -146,6 +149,20 @@ class IrCameraWidget(QFrame):
         self._style_btn(connected=False)
         row.addWidget(self._btn)
 
+        # Screenshot button — enabled only when a camera is connected
+        self._btn_capture = QPushButton("Take Screenshot")
+        self._btn_capture.setFixedHeight(24)
+        self._btn_capture.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._btn_capture.setStyleSheet(
+            "QPushButton { background: white; color: #0F172A; border: 1px solid #CBD5E1; "
+            "border-radius: 5px; font-size: 11px; padding: 0 10px; }"
+            "QPushButton:hover { background: #F8FAFC; }"
+            "QPushButton:disabled { color: #CBD5E1; border-color: #E2E8F0; }"
+        )
+        self._btn_capture.setEnabled(False)
+        self._btn_capture.clicked.connect(self._capture_screenshot)
+        row.addWidget(self._btn_capture)
+
         return row
 
     def _build_view(self) -> QLabel:
@@ -240,12 +257,14 @@ class IrCameraWidget(QFrame):
             self._status.setText(label)
             self._status.setStyleSheet(f"color: {SUCCESS}; font-size: 11px;")
             self._style_btn(connected=True)
+            self._btn_capture.setEnabled(True)
             self._timer.start()
         else:
             self._dot.setStyleSheet(f"color: {ERROR}; font-size: 12px; padding: 0;")
             self._status.setText("No camera found")
             self._status.setStyleSheet(f"color: {ERROR}; font-size: 11px;")
             self._style_btn(connected=False)
+            self._btn_capture.setEnabled(False)
 
     # ── frame update ─────────────────────────────────────────────────────────
 
@@ -290,6 +309,8 @@ class IrCameraWidget(QFrame):
         self._status.setText("Not connected")
         self._status.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 11px;")
         self._style_btn(connected=False)
+        if hasattr(self, "_btn_capture"):
+            self._btn_capture.setEnabled(False)
         self._bar.clear()
         self._scale_lo.setText("—")
         self._scale_hi.setText("—")
@@ -315,4 +336,27 @@ class IrCameraWidget(QFrame):
                 f"border-radius:5px; font-size:11px; font-weight:600; padding:0 10px; }}"
                 f"QPushButton:hover {{ background:{PRIMARY_HOVER}; }}"
             )
+            
+    def _capture_screenshot(self) -> None:
+        """Capture the current IR frame as a PNG image."""
+        pix = self._view.pixmap()
+        if pix is None or pix.isNull():
+            QMessageBox.information(
+                self,
+                "IR Screenshot",
+                "No image is currently available to capture.",
+            )
+            return
+
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Save IR screenshot",
+            "ir_screenshot.png",
+            "PNG image (*.png)",
+        )
+        if not path:
+            return
+        if not path.lower().endswith(".png"):
+            path += ".png"
+        pix.save(path, "PNG")
 
