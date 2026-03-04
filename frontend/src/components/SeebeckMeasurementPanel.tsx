@@ -1,6 +1,8 @@
 import React, { useState, useRef, useEffect } from 'react';
 import {
-  Box, Paper, Typography, Button, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, CircularProgress, Alert, Switch, FormControlLabel, TextField, FormControl, InputLabel, Select, MenuItem
+  Box, Paper, Typography, Button, Table, TableBody, TableCell, TableContainer, TableHead, TableRow,
+  CircularProgress, Alert, Switch, FormControlLabel, TextField, FormControl, InputLabel, Select,
+  MenuItem, Menu, Divider,
 } from '@mui/material';
 import axios from 'axios';
 import {
@@ -308,6 +310,10 @@ const SeebeckMeasurementPanel: React.FC = () => {
   const deltaGraphRef = useRef<HTMLDivElement>(null);
   const seebeckGraphRef = useRef<HTMLDivElement>(null);
 
+  // Dropdown menu anchors for download buttons
+  const [graphMenuAnchor, setGraphMenuAnchor] = useState<null | HTMLElement>(null);
+  const [dataMenuAnchor, setDataMenuAnchor]   = useState<null | HTMLElement>(null);
+
   // Poll session status and data
   useEffect(() => {
     if (running) {
@@ -472,26 +478,57 @@ const SeebeckMeasurementPanel: React.FC = () => {
     }
   };
 
-  // Handlers for new buttons
-  const handleDownloadGraphsPng = async () => {
-    if (!liveGraphRef.current || !deltaGraphRef.current) {
-      alert('Graphs are not rendered yet.');
-      return;
+  // ── Graph download helpers ──────────────────────────────────────────────────
+
+  /** Download a single graph div as a PNG file. */
+  const downloadSingleGraph = async (
+    ref: React.RefObject<HTMLDivElement>,
+    filename: string,
+  ) => {
+    if (!ref.current) { alert('Graph not rendered yet.'); return; }
+    const canvas = await html2canvas(ref.current, { backgroundColor: '#ffffff' });
+    canvas.toBlob(blob => { if (blob) saveAs(blob, filename); });
+  };
+
+  /** Download all three graphs as individual PNG files. */
+  const handleDownloadAllGraphs = async () => {
+    const sources = [
+      { ref: liveGraphRef,    filename: 'live_graph.png' },
+      { ref: deltaGraphRef,   filename: 'temf_vs_delta_temp.png' },
+      { ref: seebeckGraphRef, filename: 'seebeck_vs_temperature.png' },
+    ].filter(s => s.ref.current);
+
+    if (!sources.length) { alert('No graphs are rendered yet.'); return; }
+
+    for (const { ref, filename } of sources) {
+      const canvas = await html2canvas(ref.current!, { backgroundColor: '#ffffff' });
+      canvas.toBlob(blob => { if (blob) saveAs(blob, filename); });
     }
-    const liveCanvas = await html2canvas(liveGraphRef.current, { backgroundColor: null });
-    const deltaCanvas = await html2canvas(deltaGraphRef.current, { backgroundColor: null });
-    liveCanvas.toBlob(blob => {
-      if (blob) saveAs(blob, 'live_graph.png');
-    });
-    deltaCanvas.toBlob(blob => {
-      if (blob) saveAs(blob, 'temf_vs_delta_temp.png');
-    });
-    if (seebeckGraphRef.current) {
-      const seebeckCanvas = await html2canvas(seebeckGraphRef.current, { backgroundColor: null });
-      seebeckCanvas.toBlob(blob => {
-        if (blob) saveAs(blob, 'seebeck_vs_temperature.png');
-      });
-    }
+  };
+
+  // ── Data download helpers ───────────────────────────────────────────────────
+
+  /** Download the raw measurement data as a CSV file. */
+  const handleDownloadCSV = () => {
+    const safe = Array.isArray(data) ? data : [];
+    if (!safe.length) return;
+
+    const headers = [
+      'Time [s]', 'TEMF [mV]', 'Temp1 [oC]', 'Temp2 [oC]',
+      'Delta Temp [oC]', 'T0 [oC]', 'T0 [K]', 'delta_T_over_T0', 'S [µV/K]', 'branch',
+    ];
+    const escape = (v: unknown) => {
+      const s = v === null || v === undefined ? '' : String(v);
+      return s.includes(',') || s.includes('"') || s.includes('\n') ? `"${s.replace(/"/g, '""')}"` : s;
+    };
+    const rows = safe.map(r => [
+      r['Time [s]'], r['TEMF [mV]'], r['Temp1 [oC]'], r['Temp2 [oC]'],
+      r['Delta Temp [oC]'], r['T0 [oC]'] ?? '', r['T0 [K]'] ?? '',
+      r['delta_T_over_T0'] ?? '', r['S [µV/K]'] ?? '', r.branch ?? '',
+    ].map(escape).join(','));
+
+    const csv = [headers.map(escape).join(','), ...rows].join('\r\n');
+    saveAs(new Blob([csv], { type: 'text/csv;charset=utf-8;' }), fileName || 'seebeck_results.csv');
   };
 
   const handleDownloadExcelWithGraph = async () => {
@@ -690,17 +727,6 @@ const SeebeckMeasurementPanel: React.FC = () => {
               <Button variant="outlined" color="secondary" onClick={handleStop} disabled={!running}>
                 Stop Measurement / 停止
               </Button>
-              {/*
-              <CSVLink data={safeData} filename={fileName} style={{ textDecoration: 'none' }}>
-                <Button variant="outlined" disabled={safeData.length === 0}>Download CSV / CSVダウンロード</Button>
-              </CSVLink>
-              */}
-              <Button variant="outlined" onClick={handleDownloadGraphsPng} disabled={safeData.length === 0}>
-                Download Graphs as PNG / グラフPNGダウンロード
-              </Button>
-              <Button variant="outlined" onClick={handleDownloadExcelWithGraph} disabled={safeData.length === 0}>
-                Download data sheet / データシートダウンロード
-              </Button>
             </Box>
             {error && <Alert severity="error" sx={{ mt: 2 }}>{error}</Alert>}
             {status?.warn_large_gradient && (
@@ -796,6 +822,70 @@ const SeebeckMeasurementPanel: React.FC = () => {
           </Paper>
         </Box>
       </Box>
+      {/* ── Download bar ─────────────────────────────────────────────────────── */}
+      <Paper sx={{ px: 2, py: 1.5, mt: 2, display: 'flex', alignItems: 'center', gap: 2, flexWrap: 'wrap' }}>
+        <Typography variant="subtitle2" sx={{ color: 'text.secondary', mr: 1 }}>
+          Export
+        </Typography>
+
+        {/* Download Graphs */}
+        <Button
+          variant="outlined"
+          size="small"
+          disabled={safeData.length === 0}
+          onClick={e => setGraphMenuAnchor(e.currentTarget)}
+        >
+          Download Graphs ▾
+        </Button>
+        <Menu
+          anchorEl={graphMenuAnchor}
+          open={Boolean(graphMenuAnchor)}
+          onClose={() => setGraphMenuAnchor(null)}
+        >
+          <MenuItem onClick={() => { downloadSingleGraph(liveGraphRef, 'live_graph.png'); setGraphMenuAnchor(null); }}>
+            Live Graph (PNG)
+          </MenuItem>
+          <MenuItem onClick={() => { downloadSingleGraph(deltaGraphRef, 'temf_vs_delta_temp.png'); setGraphMenuAnchor(null); }}>
+            TEMF vs ΔT (PNG)
+          </MenuItem>
+          <MenuItem onClick={() => { downloadSingleGraph(seebeckGraphRef, 'seebeck_vs_temperature.png'); setGraphMenuAnchor(null); }}>
+            Seebeck vs T₀ (PNG)
+          </MenuItem>
+          <Divider />
+          <MenuItem onClick={() => { handleDownloadAllGraphs(); setGraphMenuAnchor(null); }}>
+            All Three Graphs (3 separate PNGs)
+          </MenuItem>
+        </Menu>
+
+        {/* Download Data */}
+        <Button
+          variant="outlined"
+          size="small"
+          disabled={safeData.length === 0}
+          onClick={e => setDataMenuAnchor(e.currentTarget)}
+        >
+          Download Data ▾
+        </Button>
+        <Menu
+          anchorEl={dataMenuAnchor}
+          open={Boolean(dataMenuAnchor)}
+          onClose={() => setDataMenuAnchor(null)}
+        >
+          <MenuItem onClick={() => { handleDownloadCSV(); setDataMenuAnchor(null); }}>
+            Download CSV (data only)
+          </MenuItem>
+          <MenuItem onClick={() => { handleDownloadExcelWithGraph(); setDataMenuAnchor(null); }}>
+            Download Excel (data + all 3 graphs)
+          </MenuItem>
+        </Menu>
+
+        {safeData.length === 0 && (
+          <Typography variant="caption" sx={{ color: 'text.disabled', ml: 1 }}>
+            Available after measurement starts
+          </Typography>
+        )}
+      </Paper>
+
       {/* Bottom: Graphs and Data Table side by side */}
       <Box sx={{ display: 'flex', flexDirection: { xs: 'column', md: 'row' }, gap: 2, width: '100%', mt: 3 }}>
         {/* Left: Graphs */}

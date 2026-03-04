@@ -18,11 +18,16 @@ from PyQt6.QtWidgets import (
     QWidget, QHBoxLayout, QVBoxLayout, QLabel, QPushButton,
     QFrame, QLineEdit, QScrollArea, QSplitter, QMessageBox,
     QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView,
+    QFileDialog,
 )
 from PyQt6.QtCore import Qt, QTimer
 
-import pyqtgraph as pg
+import os
+import tempfile
 
+import pyqtgraph as pg
+from openpyxl import Workbook
+from openpyxl.drawing.image import Image as XLImage
 from ..theme import (
     CARD_BG, BORDER, CONTENT_BG, PRIMARY, PRIMARY_HOVER,
     TEXT_PRIMARY, TEXT_SECONDARY, TEXT_MUTED,
@@ -304,6 +309,39 @@ class SeebeckPage(QWidget):
         top_row.addStretch()
         v.addLayout(top_row)
 
+        # ── Export bar: graphs + data download ───────────────────────────
+        export_row = QHBoxLayout()
+        export_row.setSpacing(10)
+
+        lbl_export = QLabel("Export:")
+        lbl_export.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 11px;")
+
+        self.btn_export_graphs = QPushButton("Download Graphs")
+        self.btn_export_graphs.setFixedHeight(26)
+        self.btn_export_graphs.setStyleSheet(
+            "QPushButton { background: white; border: 1px solid #CBD5E1; "
+            "border-radius: 4px; padding: 2px 10px; font-size: 11px; }"
+            "QPushButton:hover { background: #F8FAFC; }"
+            "QPushButton:disabled { color: #CBD5E1; border-color: #E2E8F0; }"
+        )
+        self.btn_export_graphs.clicked.connect(self._export_graphs)
+
+        self.btn_export_data = QPushButton("Download Data")
+        self.btn_export_data.setFixedHeight(26)
+        self.btn_export_data.setStyleSheet(
+            "QPushButton { background: white; border: 1px solid #CBD5E1; "
+            "border-radius: 4px; padding: 2px 10px; font-size: 11px; }"
+            "QPushButton:hover { background: #F8FAFC; }"
+            "QPushButton:disabled { color: #CBD5E1; border-color: #E2E8F0; }"
+        )
+        self.btn_export_data.clicked.connect(self._export_data)
+
+        export_row.addWidget(lbl_export)
+        export_row.addWidget(self.btn_export_graphs)
+        export_row.addWidget(self.btn_export_data)
+        export_row.addStretch()
+        v.addLayout(export_row)
+
         pg.setConfigOptions(antialias=True)
 
         # ── Chart 1: TEMF (left) + T₁/T₂ (right) vs Time  [dual Y-axis] ─
@@ -454,6 +492,135 @@ class SeebeckPage(QWidget):
 
     # ------------------------------------------------------------------ controls
 
+    def _export_graphs(self):
+        """Save the three charts as individual PNG files."""
+        if not self._data:
+            QMessageBox.information(self, "Export graphs", "No data available yet.")
+            return
+
+        base, _ = QFileDialog.getSaveFileName(
+            self,
+            "Save graphs (base filename)",
+            "seebeck_graphs",
+            "PNG images (*.png)",
+        )
+        if not base:
+            return
+
+        root, _ext = os.path.splitext(base)
+
+        targets = [
+            (self.chart_live,   f"{root}_live.png"),
+            (self.chart_temf_dt, f"{root}_temf_vs_dt.png"),
+            (self.chart_s_t0,   f"{root}_seebeck_vs_t0.png"),
+        ]
+        for widget, path in targets:
+            pix = widget.grab()
+            if not pix.isNull():
+                pix.save(path, "PNG")
+
+        QMessageBox.information(
+            self,
+            "Export graphs",
+            "Graphs saved as:\n"
+            + "\n".join(os.path.basename(p) for _, p in targets),
+        )
+
+    def _export_data(self):
+        """Save data table as CSV or Excel (with embedded graphs)."""
+        if not self._data:
+            QMessageBox.information(self, "Export data", "No data available yet.")
+            return
+
+        path, selected_filter = QFileDialog.getSaveFileName(
+            self,
+            "Save data",
+            "seebeck_data.xlsx",
+            "Excel workbook (*.xlsx);;CSV file (*.csv)",
+        )
+        if not path:
+            return
+
+        if selected_filter.startswith("CSV") or path.lower().endswith(".csv"):
+            if not path.lower().endswith(".csv"):
+                path += ".csv"
+            self._export_csv(path)
+        else:
+            if not path.lower().endswith(".xlsx"):
+                path += ".xlsx"
+            self._export_excel_with_graphs(path)
+
+    # ------------------------------------------------------------------ export helpers
+
+    def _export_csv(self, path: str):
+        """Write current data table to a CSV file."""
+        import csv
+
+        headers = [col[1] for col in _TABLE_COLS]
+        keys    = [col[0] for col in _TABLE_COLS]
+
+        with open(path, "w", newline="", encoding="utf-8") as f:
+            writer = csv.writer(f)
+            writer.writerow(headers)
+            for row in self._data:
+                writer.writerow(
+                    [row.get(k, "") if row.get(k) is not None else "" for k in keys]
+                )
+
+        QMessageBox.information(self, "Export data", f"CSV saved to:\n{path}")
+
+    def _export_excel_with_graphs(self, path: str):
+        """Write data + three chart images into an Excel workbook."""
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "Data"
+
+        # Metadata / header block could be added here if needed.
+
+        # Table header
+        headers = [col[1] for col in _TABLE_COLS]
+        keys    = [col[0] for col in _TABLE_COLS]
+        ws.append(headers)
+        for row in self._data:
+            ws.append(
+                [row.get(k, "") if row.get(k) is not None else "" for k in keys]
+            )
+
+        # Leave one empty row, then start placing images
+        img_start_row = len(self._data) + 3
+
+        tmpdir = tempfile.mkdtemp(prefix="seebeck_graphs_")
+        files: list[tuple[str, int]] = []
+
+        def _save_chart(widget: pg.PlotWidget, name: str, row_offset: int):
+            pix = widget.grab()
+            if pix.isNull():
+                return
+            file_path = os.path.join(tmpdir, name)
+            pix.save(file_path, "PNG")
+            img = XLImage(file_path)
+            cell = f"A{img_start_row + row_offset}"
+            ws.add_image(img, cell)
+            files.append((file_path, img_start_row + row_offset))
+
+        _save_chart(self.chart_live,    "chart_live.png", 0)
+        _save_chart(self.chart_temf_dt, "chart_temf_dt.png", 20)
+        _save_chart(self.chart_s_t0,    "chart_s_t0.png", 40)
+
+        wb.save(path)
+
+        # Best-effort cleanup of temp files
+        for fp, _ in files:
+            try:
+                os.remove(fp)
+            except OSError:
+                pass
+        try:
+            os.rmdir(tmpdir)
+        except OSError:
+            pass
+
+        QMessageBox.information(self, "Export data", f"Excel workbook saved to:\n{path}")
     def _start(self):
         from ...services.measurement_service import SeebeckService
 
