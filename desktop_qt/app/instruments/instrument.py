@@ -9,7 +9,7 @@ logger = logging.getLogger(__name__)
 ADDR_2182A = "GPIB0::7::INSTR"
 ADDR_2700 = "GPIB0::16::INSTR"
 ADDR_PK160 = "GPIB0::15::INSTR"
-ADDR_2401 = "GPIB0::24::INSTR"  # Default address, will be updated after discovery
+ADDR_6221 = "GPIB0::24::INSTR"  # Default address, will be updated after discovery
 
 class Keithley2182A:
     def __init__(self, resource_name: str = ADDR_2182A):
@@ -265,9 +265,9 @@ class Keithley2700:
             print(f"Failed to get status on 2700: {str(e)}")
             return {"connected": False}
 
-class Keithley2401:
-    """Keithley 2401 SourceMeter for current-voltage measurements and resistivity calculations."""
-    def __init__(self, resource_name: str = ADDR_2401):
+class Keithley6221:
+    """Keithley 6221 SourceMeter for current-voltage measurements and resistivity calculations."""
+    def __init__(self, resource_name: str = ADDR_6221):
         self.resource_name = resource_name
         self.instrument = None
         self.connected = False
@@ -285,13 +285,13 @@ class Keithley2401:
             self.instrument = rm.open_resource(self.resource_name)
             self.instrument.timeout = 20000
             self.connected = True
-            logger.info(f"Connected to Keithley 2401 at {self.resource_name}")
-            print(f"Connected to Keithley 2401 at {self.resource_name}")
+            logger.info(f"Connected to Keithley 6221 at {self.resource_name}")
+            print(f"Connected to Keithley 6221 at {self.resource_name}")
             return True
         except Exception as e:
             error_str = str(e)
-            logger.error(f"Failed to connect to Keithley 2401: {error_str}")
-            print(f"Failed to connect to Keithley 2401: {error_str}")
+            logger.error(f"Failed to connect to Keithley 6221: {error_str}")
+            print(f"Failed to connect to Keithley 6221: {error_str}")
             if "VI_ERROR_ALLOC" in error_str or "-1073807300" in error_str:
                 logger.error("VI_ERROR_ALLOC: Resource allocation failed. Check for other processes using this instrument.")
             self.connected = False
@@ -303,15 +303,15 @@ class Keithley2401:
             try:
                 self.instrument.close()
             except Exception as e:
-                logger.warning(f"Error closing 2401 connection: {str(e)}")
+                logger.warning(f"Error closing 6221 connection: {str(e)}")
             finally:
                 self.instrument = None
                 self.connected = False
-                logger.info("Disconnected Keithley 2401")
-                print("Disconnected Keithley 2401")
+                logger.info("Disconnected Keithley 6221")
+                print("Disconnected Keithley 6221")
 
     def configure_voltage_source(self, voltage_limit: float = 1.0, current_limit: float = 0.1):
-        """Configure 2401 as voltage source with limits."""
+        """Configure 6221 as voltage source with limits."""
         if not self.connected:
             return False
         try:
@@ -324,16 +324,16 @@ class Keithley2401:
             self.instrument.write(":SENS:FUNC 'CURR'")
             self.instrument.write(":SENS:CURR:RANG:AUTO ON")
             self.instrument.write(":FORM:ELEM CURR, VOLT")
-            logger.info(f"Configured 2401: V_limit={voltage_limit}V, I_limit={current_limit}A")
-            print(f"Configured 2401: V_limit={voltage_limit}V, I_limit={current_limit}A")
+            logger.info(f"Configured 6221: V_limit={voltage_limit}V, I_limit={current_limit}A")
+            print(f"Configured 6221: V_limit={voltage_limit}V, I_limit={current_limit}A")
             return True
         except Exception as e:
-            logger.error(f"Failed to configure 2401: {str(e)}")
-            print(f"Failed to configure 2401: {str(e)}")
+            logger.error(f"Failed to configure 6221: {str(e)}")
+            print(f"Failed to configure 6221: {str(e)}")
             return False
 
     def configure_current_source(self, current_limit: float = 0.01, voltage_limit: float = 1.0):
-        """Configure 2401 as current source with limits."""
+        """Configure 6221 as current source with limits."""
         if not self.connected:
             return False
         try:
@@ -346,12 +346,12 @@ class Keithley2401:
             self.instrument.write(":SENS:FUNC 'VOLT'")
             self.instrument.write(":SENS:VOLT:RANG:AUTO ON")
             self.instrument.write(":FORM:ELEM VOLT, CURR")
-            logger.info(f"Configured 2401: I_limit={current_limit}A, V_limit={voltage_limit}V")
-            print(f"Configured 2401: I_limit={current_limit}A, V_limit={voltage_limit}V")
+            logger.info(f"Configured 6221: I_limit={current_limit}A, V_limit={voltage_limit}V")
+            print(f"Configured 6221: I_limit={current_limit}A, V_limit={voltage_limit}V")
             return True
         except Exception as e:
-            logger.error(f"Failed to configure 2401: {str(e)}")
-            print(f"Failed to configure 2401: {str(e)}")
+            logger.error(f"Failed to configure 6221: {str(e)}")
+            print(f"Failed to configure 6221: {str(e)}")
             return False
 
     def set_voltage(self, voltage: float):
@@ -359,10 +359,10 @@ class Keithley2401:
             return False
         try:
             self.instrument.write(f":SOUR:VOLT:LEV {voltage}")
-            logger.info(f"2401 set voltage: {voltage}V")
+            logger.info(f"6221 set voltage: {voltage}V")
             return True
         except Exception as e:
-            logger.error(f"Failed to set voltage on 2401: {str(e)}")
+            logger.error(f"Failed to set voltage on 6221: {str(e)}")
             return False
 
     def set_current(self, current: float):
@@ -370,10 +370,10 @@ class Keithley2401:
             return False
         try:
             self.instrument.write(f":SOUR:CURR:LEV {current}")
-            logger.info(f"2401 set current: {current}A")
+            logger.info(f"6221 set current: {current}A")
             return True
         except Exception as e:
-            logger.error(f"Failed to set current on 2401: {str(e)}")
+            logger.error(f"Failed to set current on 6221: {str(e)}")
             return False
 
     def output_on(self):
@@ -381,10 +381,10 @@ class Keithley2401:
             return False
         try:
             self.instrument.write(":OUTP ON")
-            logger.info("2401 output ON")
+            logger.info("6221 output ON")
             return True
         except Exception as e:
-            logger.error(f"Failed to turn on 2401 output: {str(e)}")
+            logger.error(f"Failed to turn on 6221 output: {str(e)}")
             return False
 
     def output_off(self):
@@ -392,10 +392,10 @@ class Keithley2401:
             return False
         try:
             self.instrument.write(":OUTP OFF")
-            logger.info("2401 output OFF")
+            logger.info("6221 output OFF")
             return True
         except Exception as e:
-            logger.error(f"Failed to turn off 2401 output: {str(e)}")
+            logger.error(f"Failed to turn off 6221 output: {str(e)}")
             return False
 
     def read_measurement(self) -> Optional[Dict[str, float]]:
@@ -424,12 +424,12 @@ class Keithley2401:
                         "resistance": resistance,
                     }
                 except ValueError:
-                    logger.error(f"Failed to parse 2401 response: {response}")
+                    logger.error(f"Failed to parse 6221 response: {response}")
                     return None
             return None
         except Exception as e:
-            logger.error(f"Failed to read measurement from 2401: {str(e)}")
-            print(f"Failed to read measurement from 2401: {str(e)}")
+            logger.error(f"Failed to read measurement from 6221: {str(e)}")
+            print(f"Failed to read measurement from 6221: {str(e)}")
             return None
 
     def get_status(self) -> Dict:
@@ -441,7 +441,7 @@ class Keithley2401:
                 "resource_name": self.resource_name
             }
         except Exception as e:
-            logger.error(f"Failed to get status on 2401: {str(e)}")
+            logger.error(f"Failed to get status on 6221: {str(e)}")
             return {"connected": False}
 
 class SeebeckSystem:
@@ -450,7 +450,7 @@ class SeebeckSystem:
         self.k2182a = Keithley2182A()
         self.k2700 = Keithley2700()
         self.pk160 = PK160()
-        self.k2401 = Keithley2401()
+        self.k6221 = Keithley6221()
         self.connected = False
         self.pk160_current_unit = "mA"  # UI and params in mA; if "A", we convert when sending to PK160
     def connect_all(self):
@@ -459,7 +459,7 @@ class SeebeckSystem:
             'k2182a': self.k2182a.connect(self.rm),
             'k2700': self.k2700.connect(self.rm),
             'pk160': self.pk160.connect(self.rm),
-            'k2401': self.k2401.connect(self.rm)
+            'k6221': self.k6221.connect(self.rm)
         }
         
         # Log connection status for each instrument
@@ -480,7 +480,7 @@ class SeebeckSystem:
         self.k2182a.disconnect()
         self.k2700.disconnect()
         self.pk160.disconnect()
-        self.k2401.disconnect()
+        self.k6221.disconnect()
         self.connected = False
     def initialize_all(self):
         self.k2182a.configure()
@@ -509,7 +509,7 @@ class SeebeckSystem:
     def measure_resistivity(self, length: float, width: float, thickness: float, 
                            voltage: Optional[float] = None, current: Optional[float] = None) -> Dict[str, Optional[float]]:
         """
-        Measure electrical resistivity using 2401 SourceMeter.
+        Measure electrical resistivity using 6221 SourceMeter.
         
         Parameters:
             length: Sample length in meters
@@ -521,38 +521,38 @@ class SeebeckSystem:
         Returns:
             Dictionary with voltage, current, resistance, resistivity, and conductivity
         """
-        if not self.k2401.connected:
-            logger.error("Keithley 2401 not connected")
+        if not self.k6221.connected:
+            logger.error("Keithley 6221 not connected")
             return {
                 "voltage": None,
                 "current": None,
                 "resistance": None,
                 "resistivity": None,
                 "conductivity": None,
-                "error": "Keithley 2401 not connected"
+                "error": "Keithley 6221 not connected"
             }
         
         try:
             # Configure based on input
             if voltage is not None:
                 # Voltage source mode
-                self.k2401.configure_voltage_source(voltage_limit=abs(voltage) * 1.2, current_limit=0.1)
-                self.k2401.set_voltage(voltage)
+                self.k6221.configure_voltage_source(voltage_limit=abs(voltage) * 1.2, current_limit=0.1)
+                self.k6221.set_voltage(voltage)
             else:
                 # Current source mode
                 applied_current = current if current is not None else 0.01
-                self.k2401.configure_current_source(current_limit=abs(applied_current) * 1.2, voltage_limit=1.0)
-                self.k2401.set_current(applied_current)
+                self.k6221.configure_current_source(current_limit=abs(applied_current) * 1.2, voltage_limit=1.0)
+                self.k6221.set_current(applied_current)
             
             # Turn on output
-            self.k2401.output_on()
+            self.k6221.output_on()
             time.sleep(0.5)  # Wait for stabilization
             
             # Read measurement
-            measurement = self.k2401.read_measurement()
+            measurement = self.k6221.read_measurement()
             
             # Turn off output
-            self.k2401.output_off()
+            self.k6221.output_off()
             
             if measurement is None:
                 return {
@@ -595,7 +595,7 @@ class SeebeckSystem:
             
         except Exception as e:
             logger.error(f"Failed to measure resistivity: {str(e)}")
-            self.k2401.output_off()
+            self.k6221.output_off()
             return {
                 "voltage": None,
                 "current": None,

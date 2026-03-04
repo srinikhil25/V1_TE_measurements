@@ -1,6 +1,6 @@
 # Seebeck / I‑V Measurement System
 
-Full-stack app (FastAPI + React/Vite) for Seebeck measurements and I‑V characterization using Keithley instruments (2700/2182A/2401/PK160) with data export and embedded charts.
+Full-stack app (FastAPI + React/Vite) for Seebeck measurements and I‑V characterization using Keithley instruments (2700/2182A/6221/PK160) with data export and embedded charts.
 
 ## Requirements
 - Python 3.10+ (FastAPI backend)
@@ -29,7 +29,7 @@ python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8080
 - 2182A: `GPIB0::7::INSTR`
 - 2700: `GPIB0::16::INSTR`
 - PK160: `GPIB0::15::INSTR`
-- 2401: `GPIB0::24::INSTR` (update if discovery shows a different address)
+- 6221: `GPIB0::24::INSTR` (update if discovery shows a different address)
 
 Use `backend/find_instruments.py` to detect and update addresses. If instruments are locked, use `backend/check_instruments.py` or `backend/fix_instrument_locks.py`.
 
@@ -46,7 +46,7 @@ npm run dev   # http://localhost:5173
 
 ## Features
 - Seebeck measurements: start/stop/status/data via Keithley 2700/2182A/PK160
-- I‑V characterization: Keithley 2401 sweep with resistance/resistivity calculation
+- I‑V characterization: Keithley 6221 sweep with resistance/resistivity calculation
 - Unit scaling (V/mV/µV, A/mA/µA/nA)
 - Graphs: I‑V, Resistance vs Voltage; optional linear fit overlay
 - Export: Excel with data and embedded graphs (I‑V + R‑V)
@@ -57,7 +57,7 @@ npm run dev   # http://localhost:5173
 - `POST /seebeck/stop` — stop session
 - `GET  /seebeck/status` — session status
 - `GET  /seebeck/data` — measurement data
-- `POST /iv/run` — run I‑V sweep (2401)
+- `POST /iv/run` — run I‑V sweep (6221)
 - `GET  /instrument/discover` — list instruments and recommended addresses
 
 ## Usage Notes

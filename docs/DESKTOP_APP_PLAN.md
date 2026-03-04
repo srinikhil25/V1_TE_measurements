@@ -143,7 +143,7 @@ graph TB
         subgraph Instruments["Hardware Layer"]
             VISA["PyVISA\n(unchanged)"]
             GPIB["GPIB Bus"]
-            INST["2182A · 2700 · 2401 · PK160"]
+            INST["2182A · 2700 · 6221 · PK160"]
             IR["Optris IR Camera"]
         end
 
@@ -524,7 +524,7 @@ flowchart TD
 │  Audit Log     │                                          │
 │                │                                          │
 ├────────────────┴─────────────────────────────────────────┤
-│  ● 2182A  ● 2700  ● 2401  ● PK160   Session: idle        │  ← Status bar (32px)
+│  ● 2182A  ● 2700  ● 6221  ● PK160   Session: idle        │  ← Status bar (32px)
 └──────────────────────────────────────────────────────────┘
 ```
 

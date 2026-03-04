@@ -1,4 +1,4 @@
-"""Settings page — GPIB addresses + change password."""
+"""Settings page — GPIB addresses, change password."""
 
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel,
@@ -61,7 +61,7 @@ class SettingsPage(QWidget):
             "Keithley 2182A": "GPIB0::7::INSTR",
             "Keithley 2700":  "GPIB0::16::INSTR",
             "PK160":          "GPIB0::15::INSTR",
-            "Keithley 2401":  "GPIB0::24::INSTR",
+            "Keithley 6221":  "GPIB0::24::INSTR",
         }
 
         card, cv = _card("GPIB Instrument Addresses")
@@ -120,7 +120,7 @@ class SettingsPage(QWidget):
             "Keithley 2182A": "ADDR_2182A",
             "Keithley 2700":  "ADDR_2700",
             "PK160":          "ADDR_PK160",
-            "Keithley 2401":  "ADDR_2401",
+            "Keithley 6221":  "ADDR_6221",
         }
         for name, field in self._addr_fields.items():
             attr = MAP.get(name)

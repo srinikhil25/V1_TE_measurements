@@ -107,15 +107,15 @@ def run_iv_sweep(
     results: List[Dict] = []
     try:
         vmax = max(abs(start_voltage), abs(stop_voltage), abs(voltage_limit))
-        system.k2401.configure_voltage_source(
+        system.k6221.configure_voltage_source(
             voltage_limit=vmax, current_limit=current_limit
         )
-        system.k2401.output_on()
+        system.k6221.output_on()
 
         for v in voltages:
-            system.k2401.set_voltage(v)
+            system.k6221.set_voltage(v)
             time.sleep(delay_ms / 1000.0)
-            meas = system.k2401.read_measurement()
+            meas = system.k6221.read_measurement()
 
             if meas is None:
                 results.append({"voltage": v, "current": None,
@@ -145,6 +145,6 @@ def run_iv_sweep(
         raise
     finally:
         try:
-            system.k2401.output_off()
+            system.k6221.output_off()
         finally:
             system.disconnect_all()

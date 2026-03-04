@@ -92,7 +92,7 @@ def get_data():
 @router.post("/resistivity")
 def measure_resistivity(params: ResistivityParams):
     """
-    Measure electrical resistivity using Keithley 2401 SourceMeter.
+    Measure electrical resistivity using Keithley 6221 SourceMeter.
     
     Requires sample dimensions (length, width, thickness) and either voltage or current.
     If voltage is provided, uses voltage source mode.

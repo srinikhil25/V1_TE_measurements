@@ -76,8 +76,8 @@ def find_instruments():
                             instrument_type = "Keithley 2182A (Nanovoltmeter)"
                         elif "2700" in model.upper() or "2700" in idn.upper():
                             instrument_type = "Keithley 2700 (Multimeter/Scanner)"
-                        elif "2401" in model.upper() or "2401" in idn.upper():
-                            instrument_type = "Keithley 2401 (SourceMeter)"
+                        elif "6221" in model.upper() or "6221" in idn.upper():
+                            instrument_type = "Keithley 6221 (SourceMeter)"
                         elif "PK160" in model.upper() or "PK160" in idn.upper():
                             instrument_type = "PK160 (Power Supply)"
                         elif "KEITHLEY" in manufacturer.upper():
@@ -129,7 +129,7 @@ def find_instruments():
         
         k2182a = None
         k2700 = None
-        k2401 = None
+        k6221 = None
         pk160 = None
         
         for inst in instruments:
@@ -139,9 +139,9 @@ def find_instruments():
             elif "2700" in inst['model'].upper() or "2700" in inst['idn'].upper():
                 k2700 = inst['address']
                 print(f"Keithley 2700:  {inst['address']}")
-            elif "2401" in inst['model'].upper() or "2401" in inst['idn'].upper():
-                k2401 = inst['address']
-                print(f"Keithley 2401:  {inst['address']}")
+            elif "6221" in inst['model'].upper() or "6221" in inst['idn'].upper():
+                k6221 = inst['address']
+                print(f"Keithley 6221:  {inst['address']}")
             elif "PK160" in inst['model'].upper() or "PK160" in inst['idn'].upper():
                 pk160 = inst['address']
                 print(f"PK160:          {inst['address']}")
@@ -152,7 +152,7 @@ def find_instruments():
         print("=" * 60)
         print(f"ADDR_2182A = \"{k2182a or 'GPIB0::7::INSTR'}\"")
         print(f"ADDR_2700  = \"{k2700 or 'GPIB0::16::INSTR'}\"")
-        print(f"ADDR_2401  = \"{k2401 or 'GPIB0::18::INSTR'}\"")
+        print(f"ADDR_6221  = \"{k6221 or 'GPIB0::18::INSTR'}\"")
         print(f"ADDR_PK160 = \"{pk160 or 'GPIB0::15::INSTR'}\"")
         print()
         

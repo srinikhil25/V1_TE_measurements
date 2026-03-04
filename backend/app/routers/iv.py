@@ -35,7 +35,7 @@ class IVResponse(BaseModel):
 @router.post("/run", response_model=IVResponse)
 def run_iv(params: IVParams) -> IVResponse:
     """
-    Run an I-V sweep using the Keithley 2401 SourceMeter.
+    Run an I-V sweep using the Keithley 6221 SourceMeter.
 
     Returns a list of points with voltage (V), current (A), resistance (Ohm),
     and optional resistivity/conductivity if sample dimensions are provided.
@@ -51,19 +51,19 @@ def run_iv(params: IVParams) -> IVResponse:
 
     # Connect instruments
     if not system.connect_all():
-        raise HTTPException(status_code=500, detail="Failed to connect to instruments (including 2401).")
+        raise HTTPException(status_code=500, detail="Failed to connect to instruments (including 6221).")
 
     results: List[IVPointOut] = []
     try:
-        # Configure 2401 in voltage source mode with protection limits
+        # Configure 6221 in voltage source mode with protection limits
         vmax = max(abs(params.start_voltage), abs(params.stop_voltage), abs(params.voltage_limit))
-        system.k2401.configure_voltage_source(voltage_limit=vmax, current_limit=params.current_limit)
-        system.k2401.output_on()
+        system.k6221.configure_voltage_source(voltage_limit=vmax, current_limit=params.current_limit)
+        system.k6221.output_on()
 
         for v in voltages:
-            system.k2401.set_voltage(v)
+            system.k6221.set_voltage(v)
             time.sleep(params.delay_ms / 1000.0)
-            meas = system.k2401.read_measurement()
+            meas = system.k6221.read_measurement()
             if meas is None:
                 results.append(IVPointOut(voltage=v))
                 continue
@@ -97,7 +97,7 @@ def run_iv(params: IVParams) -> IVResponse:
         raise HTTPException(status_code=500, detail=f"IV sweep failed: {str(e)}")
     finally:
         try:
-            system.k2401.output_off()
+            system.k6221.output_off()
         finally:
             system.disconnect_all()
 

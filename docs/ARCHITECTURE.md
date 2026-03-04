@@ -28,7 +28,7 @@ The **V1 Thermoelectric Measurement System** is a full-stack laboratory automati
 | Workflow | Instruments | Measured Quantities |
 |---|---|---|
 | **Seebeck Coefficient** | 2182A, 2700, PK160 | TEMF, T₁, T₂, ΔT, S (µV/K) |
-| **I-V / Resistivity** | 2401 | V, I, R (Ω), ρ (Ω·m), σ (S/m) |
+| **I-V / Resistivity** | 6221 | V, I, R (Ω), ρ (Ω·m), σ (S/m) |
 
 Additionally, an **Optris IR camera** subsystem streams live thermal imagery over WebSocket.
 
@@ -89,7 +89,7 @@ graph TB
         K2182A["Keithley 2182A\nNanovoltmeter\nGPIB::7"]
         K2700["Keithley 2700\nDMM / Scanner\nGPIB::16"]
         PK160["PK160\nCurrent Supply\nGPIB::15"]
-        K2401["Keithley 2401\nSourceMeter\nGPIB::24"]
+        K6221["Keithley 6221\nSourceMeter\nGPIB::24"]
     end
 
     subgraph IRCamera["IR Camera"]
@@ -106,7 +106,7 @@ graph TB
     PV --> K2182A
     PV --> K2700
     PV --> PK160
-    PV --> K2401
+    PV --> K6221
     OTC --> OTC_SDK
 ```
 
@@ -149,7 +149,7 @@ classDiagram
         +Keithley2182A k2182a
         +Keithley2700 k2700
         +PK160 pk160
-        +Keithley2401 k2401
+        +Keithley6221 k6221
         +str pk160_current_unit
         +connect_all() bool
         +disconnect_all()
@@ -188,7 +188,7 @@ classDiagram
         +output_off()
     }
 
-    class Keithley2401 {
+    class Keithley6221 {
         +str resource_name
         +connect(rm) bool
         +disconnect()
@@ -233,7 +233,7 @@ classDiagram
     SeebeckSystem "1" *-- "1" Keithley2182A
     SeebeckSystem "1" *-- "1" Keithley2700
     SeebeckSystem "1" *-- "1" PK160
-    SeebeckSystem "1" *-- "1" Keithley2401
+    SeebeckSystem "1" *-- "1" Keithley6221
     MeasurementSessionManager "1" *-- "1" SeebeckSystem
 ```
 
@@ -339,7 +339,7 @@ flowchart LR
 | Keithley 2182A | `GPIB0::7::INSTR` | Nanovoltmeter — measures thermoelectric EMF (TEMF) in the Seebeck loop |
 | Keithley 2700 | `GPIB0::16::INSTR` | DMM/Scanner with thermocouple card — reads T₁ and T₂ via K-type TCs on channels 102 and 104 |
 | PK160 | `GPIB0::15::INSTR` | Programmable current supply — heats the sample by ramping current through the heater element |
-| Keithley 2401 | `GPIB0::24::INSTR` | SourceMeter — sources voltage (or current) and measures I for I-V sweeps and resistivity |
+| Keithley 6221 | `GPIB0::24::INSTR` | SourceMeter — sources voltage (or current) and measures I for I-V sweeps and resistivity |
 
 ### 5.2 Instrument Communication Sequence
 
@@ -383,29 +383,29 @@ sequenceDiagram
     SM->>SYS: disconnect_all()
 ```
 
-### 5.3 I-V Sweep Sequence (Keithley 2401)
+### 5.3 I-V Sweep Sequence (Keithley 6221)
 
 ```mermaid
 sequenceDiagram
     participant FE as Frontend
     participant IV as iv.py router
     participant SYS as SeebeckSystem
-    participant K2401 as Keithley 2401
+    participant K6221 as Keithley 6221
 
     FE->>IV: POST /api/iv/run {params}
     IV->>SYS: connect_all()
-    IV->>K2401: configure_voltage_source(v_limit, i_limit)
-    Note over K2401: RST, set SOUR:FUNC VOLT, apply current protection limit
-    IV->>K2401: output_on()
+    IV->>K6221: configure_voltage_source(v_limit, i_limit)
+    Note over K6221: RST, set SOUR:FUNC VOLT, apply current protection limit
+    IV->>K6221: output_on()
 
     loop For each voltage setpoint
-        IV->>K2401: set_voltage(v)
-        IV->>K2401: INIT then FETCH?
-        K2401-->>IV: measured (I, V)
+        IV->>K6221: set_voltage(v)
+        IV->>K6221: INIT then FETCH?
+        K6221-->>IV: measured (I, V)
         IV->>IV: R = V/I, compute resistivity if dims provided
     end
 
-    IV->>K2401: output_off()
+    IV->>K6221: output_off()
     IV->>SYS: disconnect_all()
     IV-->>FE: [{voltage, current, resistance, resistivity, conductivity}, …]
 ```
@@ -549,7 +549,7 @@ flowchart LR
     FE_IV --> IV_ROUTER["iv.py\nrun_iv(params)"]
     IV_ROUTER -->|"compute linspace voltages"| SWEEP_LOOP{{"Loop N points"}}
 
-    SWEEP_LOOP -->|"set V, wait delay_ms"| MEAS["2401 :INIT; :FETCH?\n→ (V_meas, I_meas)"]
+    SWEEP_LOOP -->|"set V, wait delay_ms"| MEAS["6221 :INIT; :FETCH?\n→ (V_meas, I_meas)"]
     MEAS --> CALC["R = V/I\nif dims: ρ = R·A/L\nσ = 1/ρ"]
     CALC --> SWEEP_LOOP
 
@@ -573,7 +573,7 @@ Base URL: `http://<host>:8080/api`
 | `POST` | `/seebeck/stop` | — → `{status}` | Gracefully stop the running session |
 | `GET` | `/seebeck/status` | — → `SessionStatus` | Session state, phase, step, ETA, metadata |
 | `GET` | `/seebeck/data` | — → `{data, analysis, metadata}` | All measurement rows + binned S analysis |
-| `POST` | `/seebeck/resistivity` | `ResistivityParams` → resistivity dict | One-shot resistivity measurement via 2401 |
+| `POST` | `/seebeck/resistivity` | `ResistivityParams` → resistivity dict | One-shot resistivity measurement via 6221 |
 
 #### MeasurementParams Schema
 
@@ -604,7 +604,7 @@ Base URL: `http://<host>:8080/api`
 
 | Method | Path | Body / Response | Description |
 |---|---|---|---|
-| `POST` | `/iv/run` | `IVParams` → `IVResponse` | Run a linear V-sweep on the Keithley 2401 |
+| `POST` | `/iv/run` | `IVParams` → `IVResponse` | Run a linear V-sweep on the Keithley 6221 |
 
 #### IVParams Schema
 
@@ -755,4 +755,4 @@ The 4-point (van der Pauw) probe arrangement is noted in metadata but the resist
 ρ = R × (width × thickness) / length    [Ω·m]
 ```
 
-Users selecting `4-probe` in the UI should be aware that the geometric correction factor is not applied automatically. A dedicated 4-probe mode with separate source/sense connections would require routing different 2401 terminals.
+Users selecting `4-probe` in the UI should be aware that the geometric correction factor is not applied automatically. A dedicated 4-probe mode with separate source/sense connections would require routing different 6221 terminals.

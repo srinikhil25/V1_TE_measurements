@@ -121,7 +121,7 @@ class MainWindow(QMainWindow):
             from .pages.users_page import UsersPage
             return UsersPage(self._user)
 
-        if key == "settings" and role in ("super_admin", "lab_admin"):
+        if key == "settings":
             from .pages.settings_page import SettingsPage
             return SettingsPage(self._user)
 

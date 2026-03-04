@@ -123,8 +123,8 @@ async def discover_instruments() -> Dict[str, Any]:
                             instrument_info["type"] = "Keithley 2182A (Nanovoltmeter)"
                         elif "2700" in model_upper or "2700" in idn_upper:
                             instrument_info["type"] = "Keithley 2700 (Multimeter/Scanner)"
-                        elif "2401" in model_upper or "2401" in idn_upper:
-                            instrument_info["type"] = "Keithley 2401 (SourceMeter)"
+                        elif "6221" in model_upper or "6221" in idn_upper:
+                            instrument_info["type"] = "Keithley 6221 (SourceMeter)"
                         elif "PK160" in model_upper or "PK160" in idn_upper:
                             instrument_info["type"] = "PK160 (Power Supply)"
                         elif "KEITHLEY" in instrument_info["manufacturer"].upper():
@@ -147,7 +147,7 @@ async def discover_instruments() -> Dict[str, Any]:
             "recommended_addresses": {
                 "ADDR_2182A": next((inst["address"] for inst in instruments if "2182" in inst["model"].upper() or "2182" in inst["idn"].upper()), "GPIB0::7::INSTR"),
                 "ADDR_2700": next((inst["address"] for inst in instruments if "2700" in inst["model"].upper() or "2700" in inst["idn"].upper()), "GPIB0::16::INSTR"),
-                "ADDR_2401": next((inst["address"] for inst in instruments if "2401" in inst["model"].upper() or "2401" in inst["idn"].upper()), "GPIB0::18::INSTR"),
+                "ADDR_6221": next((inst["address"] for inst in instruments if "6221" in inst["model"].upper() or "6221" in inst["idn"].upper()), "GPIB0::18::INSTR"),
                 "ADDR_PK160": next((inst["address"] for inst in instruments if "PK160" in inst["model"].upper() or "PK160" in inst["idn"].upper()), "GPIB0::15::INSTR")
             }
         }

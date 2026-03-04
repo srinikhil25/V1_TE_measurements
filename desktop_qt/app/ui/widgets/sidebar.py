@@ -16,7 +16,7 @@ NAV_ITEMS: List[Tuple[str, str, tuple | None]] = [
     ("I-V Sweep",       "iv",        ("super_admin", "lab_admin", "researcher")),
     ("History",         "history",   ("super_admin", "lab_admin", "researcher")),
     ("User Management", "users",     ("super_admin",)),
-    ("Settings",        "settings",  ("super_admin", "lab_admin")),
+    ("Settings",        "settings",  None),   # all roles: password + IR camera paths
 ]
 
 ROLE_LABELS = {

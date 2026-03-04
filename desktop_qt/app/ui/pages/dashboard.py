@@ -218,7 +218,7 @@ class DashboardPage(QWidget):
 
         badge_row = QHBoxLayout()
         badge_row.setSpacing(12)
-        for name in ["Keithley 2182A", "Keithley 2700", "PK160", "Keithley 2401"]:
+        for name in ["Keithley 2182A", "Keithley 2700", "PK160", "Keithley 6221"]:
             badge = _InstrumentBadge(name)
             self._badges[name] = badge
             badge_row.addWidget(badge)
@@ -239,7 +239,7 @@ class DashboardPage(QWidget):
             ))
             actions_row.addWidget(_ActionCard(
                 "I-V Sweep",
-                "Sweep voltage and record current via Keithley 2401.",
+                "Sweep voltage and record current via Keithley 6221.",
                 "iv", self._navigate,
             ))
             actions_row.addStretch()
@@ -261,7 +261,7 @@ class DashboardPage(QWidget):
             "Keithley 2182A": "GPIB0::7::INSTR",
             "Keithley 2700":  "GPIB0::16::INSTR",
             "PK160":          "GPIB0::15::INSTR",
-            "Keithley 2401":  "GPIB0::24::INSTR",
+            "Keithley 6221":  "GPIB0::24::INSTR",
         }
         try:
             import pyvisa

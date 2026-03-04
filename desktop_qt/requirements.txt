@@ -6,3 +6,4 @@ numpy>=1.26.0
 openpyxl>=3.1.2
 pyvisa>=1.14.1
 pyinstaller>=6.0.0
+pyOptris @ git+https://github.com/FiloCara/pyOptris.git
