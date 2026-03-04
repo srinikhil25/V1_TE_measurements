@@ -107,8 +107,8 @@ class HistoryPage(QWidget):
             return
 
         from ...core.database import SessionLocal
-        from ...models.db_models import Measurement, MeasurementRow
-        import json
+        from ...models.db_models import Measurement, MeasurementRow, MeasurementIntegrity
+        import json, hashlib
 
         db = SessionLocal()
         try:
@@ -130,6 +130,13 @@ class HistoryPage(QWidget):
                 .all()
             )
             data = [json.loads(r.data_json) for r in rows]
+
+            # Integrity record (if present)
+            integ = (
+                db.query(MeasurementIntegrity)
+                .filter_by(measurement_id=measurement_id)
+                .first()
+            )
         finally:
             db.close()
 
@@ -166,6 +173,22 @@ class HistoryPage(QWidget):
         )
         hdr.addWidget(title)
         hdr.addStretch()
+        # Integrity status (if we have a recorded hash)
+        if integ is not None:
+            # Recompute hash for verification
+            canonical = json.dumps(data, sort_keys=True, separators=(",", ":"))
+            digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+            ok = digest == integ.data_hash
+            lbl_int = QLabel(
+                "Integrity: OK"
+                if ok
+                else "Integrity: MISMATCH"
+            )
+            lbl_int.setStyleSheet(
+                "color: %s; font-size: 11px; font-weight: 600;"
+                % ("#16A34A" if ok else "#DC2626")
+            )
+            hdr.addWidget(lbl_int)
         layout.addLayout(hdr)
 
         # Export buttons

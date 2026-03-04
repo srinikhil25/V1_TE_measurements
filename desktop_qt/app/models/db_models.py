@@ -77,3 +77,15 @@ class MeasurementRow(Base):
     data_json      = Column(Text, nullable=False)
 
     measurement = relationship("Measurement", back_populates="rows")
+
+
+class MeasurementIntegrity(Base):
+    """Integrity meta-data for a measurement — SHA-256 hash of all data rows."""
+
+    __tablename__ = "measurement_integrity"
+
+    measurement_id = Column(
+        Integer, ForeignKey("measurements.id"), primary_key=True, nullable=False
+    )
+    data_hash   = Column(String(128), nullable=False)
+    created_at  = Column(DateTime, default=func.now(), nullable=False)

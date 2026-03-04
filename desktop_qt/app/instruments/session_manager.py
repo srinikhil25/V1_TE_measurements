@@ -8,7 +8,7 @@ from typing import Optional, Dict, List, Any
 from .instrument import SeebeckSystem
 from .seebeck_analysis import binned_seebeck_analysis
 from ..core.database import get_session
-from ..models.db_models import Measurement, MeasurementRow
+from ..models.db_models import Measurement, MeasurementRow, MeasurementIntegrity
 
 logger = logging.getLogger(__name__)
 
@@ -324,6 +324,29 @@ class MeasurementSessionManager:
             # Final DB commit for any remaining rows + mark measurement finished.
             if db is not None and self._db_measurement_id is not None and measurement_obj is not None:
                 try:
+                    # Compute integrity hash over all rows in this session (in-memory data).
+                    with self.lock:
+                        data_copy = list(self.session_data)
+                    if data_copy:
+                        import hashlib
+                        canonical = json.dumps(
+                            data_copy, sort_keys=True, separators=(",", ":")
+                        )
+                        digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+                        integ = (
+                            db.query(MeasurementIntegrity)
+                            .filter_by(measurement_id=self._db_measurement_id)
+                            .first()
+                        )
+                        if integ is None:
+                            integ = MeasurementIntegrity(
+                                measurement_id=self._db_measurement_id,
+                                data_hash=digest,
+                            )
+                            db.add(integ)
+                        else:
+                            integ.data_hash = digest
+
                     measurement_obj.status = "finished"
                     measurement_obj.finished_at = datetime.utcnow()
                     db.commit()
