@@ -1,29 +1,39 @@
 import threading
 import time
 import logging
+import json
+from datetime import datetime
 from typing import Optional, Dict, List, Any
+
 from .instrument import SeebeckSystem
 from .seebeck_analysis import binned_seebeck_analysis
+from ..core.database import get_session
+from ..models.db_models import Measurement, MeasurementRow
 
 logger = logging.getLogger(__name__)
 
 # Differential method: ΔT/T₀ should be small for linear S. Warn if above this.
 LARGE_GRADIENT_RATIO = 0.1
 
+
 class MeasurementSessionManager:
     def __init__(self):
         self.session_active = False
         self.session_thread = None
-        self.session_data = []
+        self.session_data: List[Dict] = []
         self.session_status = "idle"
-        self.session_params = None
+        self.session_params: Optional[Dict] = None
         self.session_start_time = None
         self.seebeck_system = SeebeckSystem()
         self.lock = threading.Lock()
         self.session_phase = None  # pre, ramp_up, hold, ramp_down, cooling_tail
         self.session_step = 0
         self.session_total_steps = 0
-        self.session_metadata = {}  # sample_id, operator, notes, target_T0_K, probe_arrangement
+        self.session_metadata: Dict[str, Any] = {}  # sample_id, operator, notes, target_T0_K, probe_arrangement
+        # DB linkage (set from params in start_session, used inside _run_session)
+        self._db_user_id: Optional[int] = None
+        self._db_lab_id: Optional[int] = None
+        self._db_measurement_id: Optional[int] = None
 
     def start_session(self, params: Dict):
         if self.session_active:
@@ -33,6 +43,10 @@ class MeasurementSessionManager:
         self.session_status = "running"
         self.session_params = params
         self.session_start_time = time.time()
+        # Capture user/lab context for DB persistence (if provided)
+        self._db_user_id = params.get("_user_id")
+        self._db_lab_id = params.get("_lab_id")
+        self._db_measurement_id = None
         self.session_metadata = {
             "sample_id": params.get("sample_id"),
             "operator": params.get("operator"),
@@ -94,6 +108,8 @@ class MeasurementSessionManager:
         return out
 
     def _run_session(self, params: Dict):
+        db = None
+        measurement_obj: Optional[Measurement] = None
         try:
             # Connect to all instruments
             if not self.seebeck_system.connect_all():
@@ -124,6 +140,34 @@ class MeasurementSessionManager:
             stabilization_delay_s = float(params.get("stabilization_delay_s") or 0.0)
             pk160_unit = params.get("pk160_current_unit") or "mA"
             self.seebeck_system.pk160_current_unit = pk160_unit
+
+            # ── Create Measurement row in DB (if user/lab known) ─────────
+            if self._db_user_id is not None and self._db_lab_id is not None:
+                try:
+                    db = get_session()
+                    measurement_obj = Measurement(
+                        user_id=self._db_user_id,
+                        lab_id=self._db_lab_id,
+                        type="seebeck",
+                        status="running",
+                        sample_id=self.session_metadata.get("sample_id"),
+                        operator=self.session_metadata.get("operator"),
+                        notes=self.session_metadata.get("notes"),
+                        params_json=json.dumps(params, default=str),
+                        started_at=datetime.utcnow(),
+                    )
+                    db.add(measurement_obj)
+                    db.commit()
+                    db.refresh(measurement_obj)
+                    self._db_measurement_id = measurement_obj.id
+                    logger.info("Measurement %s started (user_id=%s)", measurement_obj.id, self._db_user_id)
+                except Exception as e:
+                    logger.error("Failed to create Measurement in DB: %s", e)
+                    if db is not None:
+                        db.rollback()
+                        db.close()
+                        db = None
+                    self._db_measurement_id = None
 
             # Segment step counts: pre, ramp-up, hold (plateau), ramp-down. Each step ~interval seconds.
             # hold_time is the plateau duration only (e.g. 200 s at peak I); total run = pre + ramp_up + hold + ramp_down.
@@ -225,6 +269,25 @@ class MeasurementSessionManager:
                 with self.lock:
                     self.session_data.append(row)
 
+                # Persist this data point to DB as a MeasurementRow (best-effort).
+                if db is not None and self._db_measurement_id is not None:
+                    try:
+                        seq = len(self.session_data)
+                        mr = MeasurementRow(
+                            measurement_id=self._db_measurement_id,
+                            seq=seq,
+                            elapsed_s=elapsed_time,
+                            data_json=json.dumps(row, default=str),
+                        )
+                        db.add(mr)
+                        # Commit in small batches to avoid excessive I/O
+                        if seq % 50 == 0:
+                            db.commit()
+                    except Exception as e:
+                        logger.error("Failed to insert MeasurementRow: %s", e)
+                        if db is not None:
+                            db.rollback()
+
                 # Cooling tail: output already turned off above; keep measuring until |ΔT| < target or timeout
                 if phase == "cooling_tail":
                     if cooling_tail_start_time is None:
@@ -257,9 +320,29 @@ class MeasurementSessionManager:
             self.session_phase = None
             self.session_step = 0
             self.session_total_steps = 0
+
+            # Final DB commit for any remaining rows + mark measurement finished.
+            if db is not None and self._db_measurement_id is not None and measurement_obj is not None:
+                try:
+                    measurement_obj.status = "finished"
+                    measurement_obj.finished_at = datetime.utcnow()
+                    db.commit()
+                except Exception as e:
+                    logger.error("Failed to finalise Measurement in DB: %s", e)
+                    db.rollback()
         except Exception as e:
             self.session_status = f"error: {str(e)}"
             self.session_active = False
             self.session_phase = None
             self.session_step = 0
-            self.session_total_steps = 0 
+            self.session_total_steps = 0
+
+            # Mark measurement as errored in DB if it exists.
+            if db is not None and self._db_measurement_id is not None and measurement_obj is not None:
+                try:
+                    measurement_obj.status = "error"
+                    measurement_obj.finished_at = datetime.utcnow()
+                    db.commit()
+                except Exception as exc:
+                    logger.error("Failed to mark Measurement as error in DB: %s", exc)
+                    db.rollback()

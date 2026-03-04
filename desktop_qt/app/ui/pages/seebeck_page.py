@@ -586,41 +586,59 @@ class SeebeckPage(QWidget):
                 [row.get(k, "") if row.get(k) is not None else "" for k in keys]
             )
 
-        # Leave one empty row, then start placing images
-        img_start_row = len(self._data) + 3
+        # Try to embed chart images if Pillow is available. If not, fall back to
+        # a data-only workbook and inform the user.
+        try:
+            # This import is what openpyxl ultimately requires; if it fails,
+            # creating XLImage below will raise ImportError.
+            import PIL  # type: ignore  # noqa: F401
 
-        tmpdir = tempfile.mkdtemp(prefix="seebeck_graphs_")
-        files: list[tuple[str, int]] = []
+            # Leave one empty row, then start placing images
+            img_start_row = len(self._data) + 3
 
-        def _save_chart(widget: pg.PlotWidget, name: str, row_offset: int):
-            pix = widget.grab()
-            if pix.isNull():
-                return
-            file_path = os.path.join(tmpdir, name)
-            pix.save(file_path, "PNG")
-            img = XLImage(file_path)
-            cell = f"A{img_start_row + row_offset}"
-            ws.add_image(img, cell)
-            files.append((file_path, img_start_row + row_offset))
+            tmpdir = tempfile.mkdtemp(prefix="seebeck_graphs_")
+            files: list[tuple[str, int]] = []
 
-        _save_chart(self.chart_live,    "chart_live.png", 0)
-        _save_chart(self.chart_temf_dt, "chart_temf_dt.png", 20)
-        _save_chart(self.chart_s_t0,    "chart_s_t0.png", 40)
+            def _save_chart(widget: pg.PlotWidget, name: str, row_offset: int):
+                pix = widget.grab()
+                if pix.isNull():
+                    return
+                file_path = os.path.join(tmpdir, name)
+                pix.save(file_path, "PNG")
+                img = XLImage(file_path)
+                cell = f"A{img_start_row + row_offset}"
+                ws.add_image(img, cell)
+                files.append((file_path, img_start_row + row_offset))
 
-        wb.save(path)
+            _save_chart(self.chart_live,    "chart_live.png", 0)
+            _save_chart(self.chart_temf_dt, "chart_temf_dt.png", 20)
+            _save_chart(self.chart_s_t0,    "chart_s_t0.png", 40)
 
-        # Best-effort cleanup of temp files
-        for fp, _ in files:
+            wb.save(path)
+
+            # Best-effort cleanup of temp files
+            for fp, _ in files:
+                try:
+                    os.remove(fp)
+                except OSError:
+                    pass
             try:
-                os.remove(fp)
+                os.rmdir(tmpdir)
             except OSError:
                 pass
-        try:
-            os.rmdir(tmpdir)
-        except OSError:
-            pass
 
-        QMessageBox.information(self, "Export data", f"Excel workbook saved to:\n{path}")
+            QMessageBox.information(self, "Export data", f"Excel workbook saved to:\n{path}")
+        except ImportError:
+            # Pillow not installed — save data only and warn once.
+            wb.save(path)
+            QMessageBox.warning(
+                self,
+                "Export data",
+                "Excel file saved without embedded graphs.\n\n"
+                "To include graphs inside the Excel workbook, install Pillow in "
+                "the desktop virtual environment:\n\n"
+                "  pip install pillow",
+            )
     def _start(self):
         from ...services.measurement_service import SeebeckService
 

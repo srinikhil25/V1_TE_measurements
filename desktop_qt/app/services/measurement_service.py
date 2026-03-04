@@ -51,6 +51,24 @@ class SeebeckService:
         return self._mgr
 
     def start(self, params: Dict) -> bool:
+        """Start a new Seebeck session for the current user.
+
+        Enriches the params dict with DB user/lab ids so the instrument layer
+        can persist the run to the SQLite database.
+        """
+        # Attach current user context for DB persistence
+        try:
+            from ..services.auth_service import get_current_user
+
+            user = get_current_user()
+            if user is not None:
+                params = dict(params)  # shallow copy so callers aren't mutated
+                params["_user_id"] = getattr(user, "id", None)
+                params["_lab_id"] = getattr(user, "lab_id", None)
+        except Exception:
+            # If anything goes wrong here, fall back to running without DB linkage.
+            pass
+
         mgr = self._manager()
         if mgr.session_active:
             return False
