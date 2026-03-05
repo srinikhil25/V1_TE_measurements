@@ -133,7 +133,48 @@ graph TD
 
 ---
 
-## 3. Layer Descriptions
+## 3. Presentation-Style Overview Diagram
+
+This diagram is a simplified, left-to-right view that matches the slide-style layout you showed.  
+Use it as a reference when placing labels on your graphics.
+
+```mermaid
+graph LR
+
+    CSRC["Current source (PK160 / 6221)"]
+    WAVE["Programmable current waveform"]
+    SAMPLE["TE sample + hot/cold blocks\nThermocouples (T_hot, T_cold) + Voltage leads (ΔV)"]
+
+    INSTR["Bench instruments\nKeithley 2700 / 2182A / PK160 / 6221"]
+    GPIB["GPIB bus (PyVISA)"]
+
+    IRCAM["Optris IR camera"]
+    IRSDK["Optris Direct SDK"]
+
+    PC["Measurement PC (Windows)\nGPIB / USB drivers"]
+
+    APP["desktop_qt desktop application\nPyQt6 UI + Seebeck measurement service\nLive plots + IR viewer + history"]
+
+    DB["Local database\nSQLite – te_measurement.db"]
+
+    CSRC --> WAVE
+    WAVE --> SAMPLE
+
+    SAMPLE --> INSTR
+    INSTR --> GPIB
+    GPIB --> PC
+
+    SAMPLE --> IRCAM
+    IRCAM --> IRSDK
+    IRSDK --> PC
+
+    PC --> APP
+    APP --> DB
+```
+
+---
+
+## 4. Layer Descriptions
 
 - **Physical / Experiment Layer**  
   Real-world hardware: thermoelectric sample, hot/cold blocks, and the thermocouples / voltage leads that sense temperatures and TE voltage. The IR camera observes the sample fixture to give a spatial temperature map.
@@ -155,7 +196,7 @@ graph TD
 
 ---
 
-## 4. How This Relates to Seebeck Measurements
+## 5. How This Relates to Seebeck Measurements
 
 During a Seebeck run:
 
