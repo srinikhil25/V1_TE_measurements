@@ -48,7 +48,7 @@ graph TD
     end
 
     %% --- Desktop Application Layer ---
-    subgraph App["`desktop_qt` Desktop Application"]
+    subgraph App["desktop_qt Desktop Application"]
         subgraph QtUI["PyQt6 UI"]
             LOGIN["LoginWindow"]
             MAINWIN["MainWindow\n+ Sidebar + Pages"]
@@ -75,7 +75,7 @@ graph TD
         end
 
         subgraph DB["Local Data Storage"]
-            SQLITE["SQLite DB\n`te_measurement.db`"]
+            SQLITE["SQLite DB\nte_measurement.db"]
         end
     end
 
