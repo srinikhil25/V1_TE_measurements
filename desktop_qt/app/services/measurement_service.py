@@ -2,12 +2,15 @@
 Singleton wrappers around the instrument layer.
 
 SeebeckService  — wraps MeasurementSessionManager (runs its own thread).
-IVService       — runs a blocking IV sweep; intended to be called from a QThread.
+IV sweep        — blocking run with progress/abort, DB persistence, linear fit.
 """
 
+import hashlib
+import json
 import logging
 import time
-from typing import Dict, List, Optional
+from datetime import datetime
+from typing import Callable, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -58,7 +61,7 @@ class SeebeckService:
         """
         # Attach current user context for DB persistence
         try:
-            from ..services.auth_service import get_current_user
+            from .auth_service import get_current_user
 
             user = get_current_user()
             if user is not None:
@@ -92,23 +95,93 @@ class SeebeckService:
 
 
 # ---------------------------------------------------------------------------
-# IV Sweep Service (blocking — run from QThread)
+# IV sweep: linear fit and ohmic status
+# ---------------------------------------------------------------------------
+
+def _linear_fit_resistance(points: List[Dict]) -> tuple:
+    """
+    Fit V = R*I (through origin). Returns (R, R_squared).
+    points: list of dicts with "current" and "voltage" keys.
+    """
+    import numpy as np
+    valid = [
+        (p["current"], p["voltage"])
+        for p in points
+        if p.get("current") is not None and p.get("voltage") is not None
+        and abs(p["current"]) > 1e-12
+    ]
+    if len(valid) < 2:
+        return None, None
+    I = np.array([x[0] for x in valid])
+    V = np.array([x[1] for x in valid])
+    # V = R*I  =>  R = sum(I*V) / sum(I^2)
+    II = I * I
+    IV = I * V
+    R = float(np.sum(IV) / np.sum(II)) if np.sum(II) > 0 else None
+    if R is None:
+        return None, None
+    V_fit = R * I
+    ss_res = np.sum((V - V_fit) ** 2)
+    ss_tot = np.sum((V - np.mean(V)) ** 2)
+    R_squared = float(1 - ss_res / ss_tot) if ss_tot > 0 else None
+    return R, R_squared
+
+
+def _ohmic_status(R_squared: Optional[float]) -> str:
+    if R_squared is None:
+        return "unknown"
+    if R_squared >= 0.999:
+        return "ohmic"
+    if R_squared >= 0.99:
+        return "check_contacts"
+    return "non_ohmic"
+
+
+# ---------------------------------------------------------------------------
+# IV Sweep (blocking — run from QThread)
 # ---------------------------------------------------------------------------
 
 def run_iv_sweep(
-    start_voltage: float,
-    stop_voltage: float,
-    points: int,
+    # Sweep definition
+    source_mode: str = "current",  # "current" = 4-probe (6221 + 2182A), "voltage" = 2-probe
+    start: float = -0.01,
+    stop: float = 0.01,
+    points: int = 21,
+    bidirectional: bool = False,
     delay_ms: float = 50.0,
     current_limit: float = 0.1,
     voltage_limit: float = 21.0,
+    nplc: float = 5.0,
+    # Dimensions (m) for resistivity
     length: Optional[float] = None,
     width: Optional[float] = None,
     thickness: Optional[float] = None,
-) -> List[Dict]:
+    # DB and metadata
+    sample_id: Optional[str] = None,
+    operator: Optional[str] = None,
+    notes: Optional[str] = None,
+    _user_id: Optional[int] = None,
+    _lab_id: Optional[int] = None,
+    # Callbacks
+    progress_callback: Optional[Callable[[int, Dict], None]] = None,
+    abort_check: Optional[Callable[[], bool]] = None,
+) -> Dict:
     """
-    Perform a blocking IV sweep and return a list of point dicts.
-    Raises RuntimeError on connection / instrument failure.
+    Run IV sweep and return full result dict.
+
+    - source_mode "current": 4-probe (6221 current source, 2182A voltmeter).
+    - source_mode "voltage": 2-probe (6221 voltage source, read I from 6221).
+
+    Returns:
+        {
+            "points": [{"voltage", "current", "resistance", "resistivity", "conductivity"}, ...],
+            "fit_R": float or None,
+            "fit_R_squared": float or None,
+            "ohmic_status": "ohmic" | "check_contacts" | "non_ohmic" | "unknown",
+            "temperature_C": float or None,
+            "measurement_id": int or None,
+            "aborted": bool,
+        }
     """
     if points < 2:
         raise ValueError("points must be >= 2")
@@ -116,53 +189,205 @@ def run_iv_sweep(
     SeebeckSystem = _get_seebeck_system()
     system = SeebeckSystem()
 
-    step = (stop_voltage - start_voltage) / (points - 1)
-    voltages = [start_voltage + i * step for i in range(points)]
+    # Build sweep sequence (current or voltage values)
+    step = (stop - start) / (points - 1)
+    forward = [start + i * step for i in range(points)]
+    if bidirectional:
+        # forward then reverse, avoid duplicating the last point
+        sequence = forward + [start + i * step for i in range(points - 2, -1, -1)]
+    else:
+        sequence = forward
 
     if not system.connect_all():
         raise RuntimeError("Failed to connect to instruments.")
 
-    results: List[Dict] = []
+    # Optional: configure 2700 for temperature and read once at start
+    temperature_C: Optional[float] = None
     try:
-        vmax = max(abs(start_voltage), abs(stop_voltage), abs(voltage_limit))
-        system.k6221.configure_voltage_source(
-            voltage_limit=vmax, current_limit=current_limit
-        )
-        system.k6221.output_on()
+        if system.k2700.connected:
+            system.k2700.configure_measurement()
+        temperature_C = system.get_temperature_avg_c()
+    except Exception:
+        pass
 
-        for v in voltages:
-            system.k6221.set_voltage(v)
-            time.sleep(delay_ms / 1000.0)
-            meas = system.k6221.read_measurement()
+    results: List[Dict] = []
+    measurement_id: Optional[int] = None
+    db = None
+    measurement_obj = None
 
-            if meas is None:
-                results.append({"voltage": v, "current": None,
-                                 "resistance": None, "resistivity": None})
-                continue
+    try:
+        # Create DB record if user/lab provided
+        if _user_id is not None and _lab_id is not None:
+            try:
+                from ..core.database import get_session
+                from ..models.db_models import Measurement
 
-            i = meas.get("current")
-            mv = meas.get("voltage", v)
-            r = meas.get("resistance")
+                db = get_session()
+                measurement_obj = Measurement(
+                    user_id=_user_id,
+                    lab_id=_lab_id,
+                    type="iv",
+                    status="running",
+                    sample_id=sample_id,
+                    operator=operator,
+                    notes=notes,
+                    params_json=json.dumps({
+                        "source_mode": source_mode,
+                        "start": start,
+                        "stop": stop,
+                        "points": points,
+                        "bidirectional": bidirectional,
+                        "delay_ms": delay_ms,
+                        "current_limit": current_limit,
+                        "voltage_limit": voltage_limit,
+                        "nplc": nplc,
+                        "length": length,
+                        "width": width,
+                        "thickness": thickness,
+                    }, default=str),
+                    started_at=datetime.utcnow(),
+                )
+                db.add(measurement_obj)
+                db.commit()
+                db.refresh(measurement_obj)
+                measurement_id = measurement_obj.id
+            except Exception as e:
+                logger.error("IV: failed to create Measurement: %s", e)
+                if db:
+                    db.rollback()
+                    db.close()
+                db = None
 
-            resistivity = conductivity = None
-            if r and length and width and thickness:
-                area = width * thickness
-                if area > 0 and length > 0:
-                    resistivity = r * area / length
-                    conductivity = 1.0 / resistivity if resistivity else None
+        if source_mode == "current":
+            # 4-probe: 6221 sources current, 2182A measures voltage
+            system.prepare_iv_4probe(
+                voltage_limit=voltage_limit,
+                current_limit=current_limit,
+                nplc=nplc,
+            )
+            delay_s = delay_ms / 1000.0
+            for idx, current_A in enumerate(sequence):
+                if abort_check and abort_check():
+                    break
+                pt = system.measure_iv_point_4probe(current_A, delay_s)
+                if pt is None:
+                    pt = {"current": current_A, "voltage": None, "resistance": None}
+                _enrich_point(pt, length, width, thickness)
+                results.append(pt)
+                if progress_callback:
+                    progress_callback(idx, pt)
+        else:
+            # 2-probe: 6221 voltage source, read I from 6221
+            vmax = max(abs(start), abs(stop), abs(voltage_limit))
+            system.k6221.configure_voltage_source(
+                voltage_limit=vmax, current_limit=current_limit
+            )
+            system.k6221.output_on()
+            delay_s = delay_ms / 1000.0
+            for idx, voltage_V in enumerate(sequence):
+                if abort_check and abort_check():
+                    break
+                system.k6221.set_voltage(voltage_V)
+                time.sleep(delay_s)
+                meas = system.k6221.read_measurement()
+                if meas is None:
+                    pt = {"voltage": voltage_V, "current": None, "resistance": None}
+                else:
+                    i = meas.get("current")
+                    v = meas.get("voltage", voltage_V)
+                    r = v / i if i and abs(i) > 1e-12 else None
+                    pt = {"voltage": v, "current": i, "resistance": r}
+                _enrich_point(pt, length, width, thickness)
+                results.append(pt)
+                if progress_callback:
+                    progress_callback(idx, pt)
+            system.k6221.output_off()
 
-            results.append({
-                "voltage": mv, "current": i, "resistance": r,
-                "resistivity": resistivity, "conductivity": conductivity,
-            })
-
-        return results
-
+        system.disconnect_all()
     except Exception as exc:
         logger.error("IV sweep error: %s", exc)
+        if system.k6221.connected:
+            try:
+                system.k6221.output_off()
+            except Exception:
+                pass
+        system.disconnect_all()
         raise
     finally:
-        try:
-            system.k6221.output_off()
-        finally:
-            system.disconnect_all()
+        if db is not None and measurement_obj is not None:
+            try:
+                from ..models.db_models import MeasurementRow, MeasurementIntegrity
+
+                # Persist all rows
+                for seq, row in enumerate(results, start=1):
+                    mr = MeasurementRow(
+                        measurement_id=measurement_obj.id,
+                        seq=seq,
+                        elapsed_s=None,
+                        data_json=json.dumps(row, default=str),
+                    )
+                    db.add(mr)
+                # Integrity hash
+                if results:
+                    canonical = json.dumps(
+                        results, sort_keys=True, separators=(",", ":")
+                    )
+                    digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+                    integ = (
+                        db.query(MeasurementIntegrity)
+                        .filter_by(measurement_id=measurement_obj.id)
+                        .first()
+                    )
+                    if integ is None:
+                        db.add(
+                            MeasurementIntegrity(
+                                measurement_id=measurement_obj.id,
+                                data_hash=digest,
+                            )
+                        )
+                    else:
+                        integ.data_hash = digest
+                measurement_obj.status = "finished"
+                measurement_obj.finished_at = datetime.utcnow()
+                db.commit()
+            except Exception as e:
+                logger.error("IV: failed to finalise DB: %s", e)
+                db.rollback()
+            finally:
+                db.close()
+
+    # Fit and ohmic status
+    fit_R, fit_R_squared = _linear_fit_resistance(results)
+    ohmic = _ohmic_status(fit_R_squared)
+
+    return {
+        "points": results,
+        "fit_R": fit_R,
+        "fit_R_squared": fit_R_squared,
+        "ohmic_status": ohmic,
+        "temperature_C": temperature_C,
+        "measurement_id": measurement_id,
+        "aborted": bool(abort_check and abort_check()),
+    }
+
+
+def _enrich_point(
+    pt: Dict,
+    length: Optional[float],
+    width: Optional[float],
+    thickness: Optional[float],
+) -> None:
+    """Add resistivity and conductivity to point if dimensions given."""
+    r = pt.get("resistance")
+    if r is None or not (length and width and thickness):
+        pt.setdefault("resistivity", None)
+        pt.setdefault("conductivity", None)
+        return
+    area = width * thickness
+    if area > 0 and length > 0:
+        rho = r * area / length
+        pt["resistivity"] = rho
+        pt["conductivity"] = 1.0 / rho if rho else None
+    else:
+        pt["resistivity"] = None
+        pt["conductivity"] = None

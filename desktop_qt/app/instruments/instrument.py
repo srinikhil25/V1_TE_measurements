@@ -59,16 +59,29 @@ class Keithley2182A:
                 self.connected = False
                 logger.info("Disconnected Keithley 2182A")
                 print("Disconnected Keithley 2182A")
-    def configure(self):
+    def configure(self, nplc: float = 5.0):
         if not self.connected:
             return False
         self.instrument.write("*RST")
         self.instrument.write(":CONF:VOLT")
         self.instrument.write(":VOLT:DIGITS 8")
-        self.instrument.write(":VOLT:NPLC 5")
+        self.instrument.write(f":VOLT:NPLC {max(0.01, min(10, nplc))}")
         logger.info("Configured Keithley 2182A")
         print("Configured Keithley 2182A")
         return True
+
+    def set_nplc(self, nplc: float) -> bool:
+        """Set voltage measurement integration (NPLC). Used for IV sweep."""
+        if not self.connected:
+            return False
+        try:
+            n = max(0.01, min(10, nplc))
+            self.instrument.write(f":VOLT:NPLC {n}")
+            return True
+        except Exception as e:
+            logger.error("2182A set_nplc: %s", e)
+            return False
+
     def read_voltage(self) -> Optional[float]:
         try:
             if not self.connected:
@@ -506,6 +519,59 @@ class SeebeckSystem:
             "Temp2_C": temp2
         }
     
+    # -------------------------------------------------------------------------
+    # I-V measurement: 4-probe (6221 current source + 2182A voltmeter)
+    # -------------------------------------------------------------------------
+
+    def prepare_iv_4probe(
+        self,
+        voltage_limit: float = 1.0,
+        current_limit: float = 0.1,
+        nplc: float = 5.0,
+    ) -> bool:
+        """Configure 6221 as current source and 2182A for voltage. Call before measure_iv_point_4probe."""
+        if not self.k6221.connected or not self.k2182a.connected:
+            return False
+        self.k2182a.configure(nplc=nplc)
+        ok = self.k6221.configure_current_source(
+            current_limit=abs(current_limit),
+            voltage_limit=abs(voltage_limit),
+        )
+        if ok:
+            self.k6221.output_on()
+        return ok
+
+    def measure_iv_point_4probe(
+        self, current_A: float, delay_s: float
+    ) -> Optional[Dict[str, float]]:
+        """Set current on 6221, wait delay_s, read voltage from 2182A. Returns {current, voltage, resistance}."""
+        if not self.k6221.set_current(current_A):
+            return None
+        time.sleep(delay_s)
+        v = self.k2182a.read_voltage()
+        if v is None:
+            return None
+        r = v / current_A if abs(current_A) > 1e-12 else None
+        return {
+            "current": current_A,
+            "voltage": v,
+            "resistance": r,
+        }
+
+    def get_temperature_avg_c(self, ch1: int = 102, ch2: int = 104) -> Optional[float]:
+        """Read 2700 channels ch1 and ch2, return average temperature in °C (for IV metadata)."""
+        if not self.k2700.connected:
+            return None
+        t1 = self.k2700.take_measurement(channel=ch1)
+        t2 = self.k2700.take_measurement(channel=ch2)
+        if t1 is None and t2 is None:
+            return None
+        if t1 is None:
+            return t2
+        if t2 is None:
+            return t1
+        return (t1 + t2) / 2.0
+
     def measure_resistivity(self, length: float, width: float, thickness: float, 
                            voltage: Optional[float] = None, current: Optional[float] = None) -> Dict[str, Optional[float]]:
         """
