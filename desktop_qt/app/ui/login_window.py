@@ -127,8 +127,8 @@ class LoginWindow(QWidget):
         self.btn_login.setStyleSheet(
             f"QPushButton {{ background: {PRIMARY}; color: white; border: none; "
             f"border-radius: 7px; font-size: 14px; font-weight: 600; }}"
-            f"QPushButton:hover {{ background: #1D4ED8; }}"
-            f"QPushButton:pressed {{ background: #1E40AF; }}"
+            f"QPushButton:hover {{ background: #26606A; }}"
+            f"QPushButton:pressed {{ background: #1F4D54; }}"
         )
         card_layout.addWidget(self.btn_login)
 

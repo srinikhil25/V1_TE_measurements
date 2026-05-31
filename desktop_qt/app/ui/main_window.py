@@ -61,7 +61,7 @@ class MainWindow(QMainWindow):
         right_layout.setSpacing(0)
 
         # Header bar
-        self.header = HeaderBar(self._user.username)
+        self.header = HeaderBar(self._user.username, self._user.role)
         self.header.logout_requested.connect(self._on_logout)
         self.header.sidebar_toggled.connect(self.sidebar.toggle)
         right_layout.addWidget(self.header)

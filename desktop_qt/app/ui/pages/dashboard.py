@@ -89,7 +89,7 @@ class _InstrumentBadge(QFrame):
             )
         else:
             self.setStyleSheet(
-                f"QFrame {{ background: {ERROR_BG}; border: 1px solid #FECACA; "
+                f"QFrame {{ background: {ERROR_BG}; border: 1px solid #C99B9B; "
                 f"border-radius: 6px; }}"
             )
             self._dot.setStyleSheet(f"color: {ERROR}; font-size: 11px; border: none;")

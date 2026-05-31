@@ -1,42 +1,45 @@
 """
-Global colour tokens and Qt Style Sheet.
+Global colour tokens and Qt Style Sheet — "quiet scientific" warm palette.
 
-Design: clean, minimal, professional.
-Sidebar dark. Content area light.
-All widget styling is defined here and applied once at QApplication level.
+Design: calm, instrument-grade. Warm off-white surfaces, muted deep-teal
+accent, soft warm-grey lines. Dark sidebar. All widget styling is defined
+here and applied once at QApplication level.
 """
 
 # ---------------------------------------------------------------------------
-# Tokens
+# Tokens — warm scientific palette
 # ---------------------------------------------------------------------------
 
-SIDEBAR_BG      = "#111827"
-SIDEBAR_HOVER   = "#1F2937"
-SIDEBAR_ACTIVE  = "#2563EB"
-SIDEBAR_TEXT    = "#F9FAFB"
-SIDEBAR_MUTED   = "#CBD5E1"   # lighter than before — better readability
+SIDEBAR_BG      = "#1F242C"
+SIDEBAR_HOVER   = "#2A2F38"
+SIDEBAR_ACTIVE  = "#2F6F7A"   # teal accent for the active nav item
+SIDEBAR_TEXT    = "#EDEAE0"
+SIDEBAR_MUTED   = "#A3A096"
 
-CONTENT_BG      = "#F1F5F9"
+CONTENT_BG      = "#F7F5F0"   # warm off-white
 CARD_BG         = "#FFFFFF"
 HEADER_BG       = "#FFFFFF"
+SUNKEN_BG       = "#EFECE4"   # warm sunken surface (sliders, tracks)
+ELEVATED_BG     = "#FBFAF5"   # subtle elevated fill (table headers, inputs)
 
-PRIMARY         = "#2563EB"
-PRIMARY_HOVER   = "#1D4ED8"
-PRIMARY_LIGHT   = "#EFF6FF"
+PRIMARY         = "#2F6F7A"   # deep teal
+PRIMARY_HOVER   = "#26606A"
+PRIMARY_PRESSED = "#1F4D54"
+PRIMARY_LIGHT   = "#E9F1F2"
 
-SUCCESS         = "#16A34A"
-SUCCESS_BG      = "#F0FDF4"
-WARNING         = "#D97706"
-WARNING_BG      = "#FFFBEB"
-ERROR           = "#DC2626"
-ERROR_BG        = "#FEF2F2"
+SUCCESS         = "#4D7C5F"
+SUCCESS_BG      = "#EDF3EE"
+WARNING         = "#B5772E"
+WARNING_BG      = "#FBF1E3"
+ERROR           = "#9B3C3C"
+ERROR_BG        = "#F7EAEA"
 
-TEXT_PRIMARY    = "#0F172A"
-TEXT_SECONDARY  = "#475569"
-TEXT_MUTED      = "#94A3B8"
+TEXT_PRIMARY    = "#1F2937"
+TEXT_SECONDARY  = "#4B5563"
+TEXT_MUTED      = "#8A8578"
 
-BORDER          = "#CBD5E1"    # slightly darker — more visible borders
-BORDER_STRONG   = "#94A3B8"
+BORDER          = "#E2DED4"   # barely-there warm grey
+BORDER_STRONG   = "#C7C0B0"
 
 # ---------------------------------------------------------------------------
 # Global QSS  (applied to QApplication once in main.py)
@@ -75,8 +78,8 @@ QFrame#card {{
 
 /* ── Input fields ────────────────────────────────────────────────────────── */
 QLineEdit {{
-    background-color: {CARD_BG};
-    border: 1.5px solid {BORDER};
+    background-color: {ELEVATED_BG};
+    border: 1.5px solid {BORDER_STRONG};
     border-radius: 5px;
     padding: 6px 10px;
     color: {TEXT_PRIMARY};
@@ -84,36 +87,38 @@ QLineEdit {{
 }}
 QLineEdit:focus {{
     border-color: {PRIMARY};
+    background-color: {CARD_BG};
 }}
 QLineEdit:disabled {{
-    background-color: #F8FAFC;
+    background-color: {SUNKEN_BG};
     color: {TEXT_MUTED};
 }}
 
 QDoubleSpinBox, QSpinBox {{
-    background-color: {CARD_BG};
-    border: 1.5px solid {BORDER};
+    background-color: {ELEVATED_BG};
+    border: 1.5px solid {BORDER_STRONG};
     border-radius: 5px;
     padding: 5px 8px;
     color: {TEXT_PRIMARY};
 }}
 QDoubleSpinBox:focus, QSpinBox:focus {{
     border-color: {PRIMARY};
+    background-color: {CARD_BG};
 }}
 QDoubleSpinBox::up-button, QSpinBox::up-button,
 QDoubleSpinBox::down-button, QSpinBox::down-button {{
     width: 20px;
-    background: #F8FAFC;
+    background: {ELEVATED_BG};
     border-left: 1px solid {BORDER};
 }}
 QDoubleSpinBox::up-button:hover, QSpinBox::up-button:hover,
 QDoubleSpinBox::down-button:hover, QSpinBox::down-button:hover {{
-    background: #E2E8F0;
+    background: {SUNKEN_BG};
 }}
 
 QComboBox {{
-    background-color: {CARD_BG};
-    border: 1.5px solid {BORDER};
+    background-color: {ELEVATED_BG};
+    border: 1.5px solid {BORDER_STRONG};
     border-radius: 5px;
     padding: 5px 10px;
     color: {TEXT_PRIMARY};
@@ -146,32 +151,32 @@ QPushButton#btn_primary {{
     color: white;
 }}
 QPushButton#btn_primary:hover   {{ background-color: {PRIMARY_HOVER}; }}
-QPushButton#btn_primary:pressed {{ background-color: #1E40AF; }}
+QPushButton#btn_primary:pressed {{ background-color: {PRIMARY_PRESSED}; }}
 QPushButton#btn_primary:disabled {{
-    background-color: #BFDBFE;
-    color: #93C5FD;
+    background-color: #BBD3D6;
+    color: #8FB6BA;
 }}
 
 QPushButton#btn_danger {{
     background-color: {ERROR};
     color: white;
 }}
-QPushButton#btn_danger:hover   {{ background-color: #B91C1C; }}
-QPushButton#btn_danger:pressed {{ background-color: #991B1B; }}
+QPushButton#btn_danger:hover   {{ background-color: #883333; }}
+QPushButton#btn_danger:pressed {{ background-color: #742B2B; }}
 QPushButton#btn_danger:disabled {{
-    background-color: #FCA5A5;
-    color: #FECACA;
+    background-color: #D8B4B4;
+    color: #C99B9B;
 }}
 
 QPushButton#btn_ghost {{
     background-color: transparent;
     color: {TEXT_SECONDARY};
-    border: 1.5px solid {BORDER};
+    border: 1.5px solid {BORDER_STRONG};
 }}
 QPushButton#btn_ghost:hover {{
-    background-color: {CONTENT_BG};
-    color: {TEXT_PRIMARY};
-    border-color: {BORDER_STRONG};
+    background-color: {ELEVATED_BG};
+    color: {PRIMARY};
+    border-color: {PRIMARY};
 }}
 
 /* ── Tables ──────────────────────────────────────────────────────────────── */
@@ -179,7 +184,7 @@ QTableWidget {{
     background-color: {CARD_BG};
     border: 1px solid {BORDER};
     border-radius: 6px;
-    gridline-color: #F1F5F9;
+    gridline-color: {SUNKEN_BG};
     color: {TEXT_PRIMARY};
 }}
 QTableWidget::item {{
@@ -191,10 +196,10 @@ QTableWidget::item:selected {{
     color: {TEXT_PRIMARY};
 }}
 QTableWidget::item:alternate {{
-    background-color: #F8FAFC;
+    background-color: {ELEVATED_BG};
 }}
 QHeaderView::section {{
-    background-color: #F8FAFC;
+    background-color: {ELEVATED_BG};
     color: {TEXT_SECONDARY};
     font-size: 11px;
     font-weight: 700;
@@ -211,7 +216,7 @@ QScrollBar:vertical {{
     margin: 0;
 }}
 QScrollBar::handle:vertical {{
-    background: {BORDER};
+    background: {BORDER_STRONG};
     border-radius: 3px;
     min-height: 24px;
 }}
@@ -224,7 +229,7 @@ QScrollBar:horizontal {{
     height: 6px;
 }}
 QScrollBar::handle:horizontal {{
-    background: {BORDER};
+    background: {BORDER_STRONG};
     border-radius: 3px;
     min-width: 24px;
 }}

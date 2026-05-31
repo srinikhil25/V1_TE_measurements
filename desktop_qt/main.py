@@ -17,8 +17,40 @@ logging.basicConfig(
 )
 
 
+def _setup_file_logging() -> str:
+    """Always write logs to a file, even when launched without a console
+    (pythonw.exe). Returns the log file path."""
+    import os
+    from pathlib import Path
+    try:
+        base = Path(os.environ.get("APPDATA", Path.home())) / "TEMeasurement"
+        base.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        base = Path.home()
+    log_path = base / "app.log"
+    fh = logging.FileHandler(log_path, mode="a", encoding="utf-8")
+    fh.setLevel(logging.INFO)
+    fh.setFormatter(logging.Formatter(
+        "%(asctime)s  %(levelname)-8s  %(name)s — %(message)s", "%Y-%m-%d %H:%M:%S"))
+    root = logging.getLogger()
+    root.addHandler(fh)
+    root.setLevel(logging.INFO)
+
+    # Capture any uncaught exception to the log file too.
+    def _excepthook(exc_type, exc_value, exc_tb):
+        logging.getLogger("uncaught").critical(
+            "Unhandled exception", exc_info=(exc_type, exc_value, exc_tb))
+        sys.__excepthook__(exc_type, exc_value, exc_tb)
+    sys.excepthook = _excepthook
+
+    logging.getLogger("startup").info("==== TE Measurement started — log at %s ====", log_path)
+    return str(log_path)
+
+
 def main() -> None:
     from pathlib import Path  # noqa: F401  (kept for potential future use)
+
+    log_path = _setup_file_logging()
 
     from PyQt6.QtWidgets import QApplication
     from PyQt6.QtGui import QFont

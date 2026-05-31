@@ -43,16 +43,16 @@ _SH  = 26   # height
 _LH = 17    # label height
 _LF = QFont("Segoe UI", 8)
 
-# ── Colour tokens ──────────────────────────────────────────────────────────
-_BG_CHART   = "#F8FAFF"
+# ── Colour tokens (warm "quiet scientific" palette) ─────────────────────────
+_BG_CHART   = "#FBFAF5"
 _BG_WIDGET  = "#FFFFFF"
-_C_GRID     = "#E2E8F0"
+_C_GRID     = "#E6E1D6"
 _C_AXIS     = "#1E293B"
-_C_WAVE     = "#1D4ED8"
-_C_FILL1    = "#BFDBFE"   # fill top
-_C_FILL2    = "#EFF6FF"   # fill bottom
-_C_DASH     = "#94A3B8"
-_C_ANN      = "#475569"   # annotation / bracket
+_C_WAVE     = "#2F6F7A"
+_C_FILL1    = "#BBD3D6"   # fill top
+_C_FILL2    = "#E9F1F2"   # fill bottom
+_C_DASH     = "#8A8578"
+_C_ANN      = "#4B5563"   # annotation / bracket
 _C_LBL      = "#64748B"   # floating label text
 _C_TICK     = "#334155"
 
@@ -169,6 +169,43 @@ class SeebeckWaveformWidget(QWidget):
     def _on_unit_changed(self, unit: str):
         self._unit = unit
         self._update_suffixes(unit)
+        self._apply_current_limit()
+        self.update()
+        self._reposition()
+
+    # ── per-mode current cap ──────────────────────────────────────────────────
+    def set_max_current_A(self, amps):
+        """Cap I₀ / I peak to a maximum current (amperes). None removes the cap."""
+        self._max_current_A = amps
+        self._apply_current_limit()
+
+    def _apply_current_limit(self):
+        cap_a = getattr(self, "_max_current_A", None)
+        if cap_a is None:
+            return
+        cap = cap_a * (1000.0 if self._unit == "mA" else 1.0)
+        self.sb_ipeak.setMaximum(cap)
+        self.sb_i0.setMaximum(cap)
+        if self.sb_ipeak.value() > cap:
+            self.sb_ipeak.setValue(cap)
+        if self.sb_i0.value() > cap:
+            self.sb_i0.setValue(cap)
+
+    def set_params(self, p: dict):
+        """Load values from a params dict (inverse of get_params)."""
+        if not p:
+            return
+        unit = p.get("pk160_current_unit", "mA")
+        idx = self.cb_unit.findText(unit)
+        if idx >= 0:
+            self.cb_unit.setCurrentIndex(idx)
+        self.sb_interval.setValue(int(p.get("interval", 2)))
+        self.sb_t_pre.setValue(int(p.get("pre_time", 5)))
+        self.sb_t_hold.setValue(int(p.get("hold_time", 600)))
+        self.sb_i0.setValue(float(p.get("start_volt", 0.0)))
+        self.sb_ipeak.setValue(float(p.get("stop_volt", 1.0)))
+        self.sb_inc.setValue(float(p.get("inc_rate", 1.0)))
+        self.sb_dec.setValue(float(p.get("dec_rate", 1.0)))
         self.update()
         self._reposition()
 

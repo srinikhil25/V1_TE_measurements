@@ -81,6 +81,19 @@ class SeebeckService:
         if self._mgr and self._mgr.session_active:
             self._mgr.stop_session()
 
+    def reset(self) -> None:
+        """Force a clean slate: stop any run, release every instrument.
+
+        Safe to call when idle — disconnect is a no-op on already-disconnected
+        instruments. Lets the operator redo a measurement without restarting
+        the app or the devices.
+        """
+        if self._mgr is not None:
+            try:
+                self._mgr.cleanup()
+            except Exception as e:
+                logger.error("SeebeckService.reset failed: %s", e)
+
     def is_active(self) -> bool:
         return bool(self._mgr and self._mgr.session_active)
 

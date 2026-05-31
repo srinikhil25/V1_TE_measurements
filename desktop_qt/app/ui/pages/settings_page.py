@@ -60,7 +60,7 @@ class SettingsPage(QWidget):
         DEFAULT_ADDRS = {
             "Keithley 2182A": "GPIB0::7::INSTR",
             "Keithley 2700":  "GPIB0::16::INSTR",
-            "PK160":          "GPIB0::15::INSTR",
+            "PK4-80M":        "GPIB0::15::INSTR",
             "Keithley 6221":  "GPIB0::24::INSTR",
         }
 
@@ -106,7 +106,7 @@ class SettingsPage(QWidget):
         save_btn.setStyleSheet(
             f"QPushButton {{ background: {PRIMARY}; color: white; border: none; "
             f"border-radius: 6px; font-size: 13px; font-weight: 600; }}"
-            f"QPushButton:hover {{ background: #1D4ED8; }}"
+            f"QPushButton:hover {{ background: #26606A; }}"
         )
         save_btn.clicked.connect(self._save_gpib)
         cv.addWidget(save_btn)
@@ -119,7 +119,7 @@ class SettingsPage(QWidget):
         MAP = {
             "Keithley 2182A": "ADDR_2182A",
             "Keithley 2700":  "ADDR_2700",
-            "PK160":          "ADDR_PK160",
+            "PK4-80M":        "ADDR_PK480M",
             "Keithley 6221":  "ADDR_6221",
         }
         for name, field in self._addr_fields.items():
@@ -187,7 +187,7 @@ class SettingsPage(QWidget):
         btn.setStyleSheet(
             f"QPushButton {{ background: {PRIMARY}; color: white; border: none; "
             f"border-radius: 6px; font-size: 13px; font-weight: 600; }}"
-            f"QPushButton:hover {{ background: #1D4ED8; }}"
+            f"QPushButton:hover {{ background: #26606A; }}"
         )
         btn.clicked.connect(self._change_password)
         cv.addWidget(btn)

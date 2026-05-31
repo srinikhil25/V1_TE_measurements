@@ -54,7 +54,7 @@ class HistoryPage(QWidget):
         self.table.setStyleSheet(
             f"QTableWidget {{ background: {CARD_BG}; border: 1px solid {BORDER}; "
             f"border-radius: 8px; font-size: 13px; }}"
-            f"QTableWidget::item:alternate {{ background: #F9FAFB; }}"
+            f"QTableWidget::item:alternate {{ background: #FBFAF5; }}"
         )
         self.table.cellDoubleClicked.connect(self._open_detail)
         v.addWidget(self.table)
@@ -186,7 +186,7 @@ class HistoryPage(QWidget):
             )
             lbl_int.setStyleSheet(
                 "color: %s; font-size: 11px; font-weight: 600;"
-                % ("#16A34A" if ok else "#DC2626")
+                % ("#4D7C5F" if ok else "#DC2626")
             )
             hdr.addWidget(lbl_int)
         layout.addLayout(hdr)
@@ -198,9 +198,9 @@ class HistoryPage(QWidget):
         for b in (btn_graphs, btn_data):
             b.setFixedHeight(26)
             b.setStyleSheet(
-                "QPushButton { background: white; border: 1px solid #CBD5E1; "
+                "QPushButton { background: white; border: 1px solid #C7C0B0; "
                 "border-radius: 4px; padding: 2px 10px; font-size: 11px; }"
-                "QPushButton:hover { background: #F8FAFC; }"
+                "QPushButton:hover { background: #FBFAF5; }"
             )
         btn_row.addWidget(btn_graphs)
         btn_row.addWidget(btn_data)

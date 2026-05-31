@@ -8,8 +8,34 @@ logger = logging.getLogger(__name__)
 
 ADDR_2182A = "GPIB0::7::INSTR"
 ADDR_2700 = "GPIB0::16::INSTR"
-ADDR_PK160 = "GPIB0::15::INSTR"
+ADDR_PK480M = "GPIB0::15::INSTR"   # Matsusada PK4-80M heater supply (was PK160)
+ADDR_PK160 = ADDR_PK480M           # backward-compat alias
 ADDR_6221 = "GPIB0::24::INSTR"  # Default address, will be updated after discovery
+
+# Keithley 2700 thermocouple channels for the two Seebeck geometries.
+# In-plane uses scanner-card positions 2 & 4; out-of-plane uses positions 3 & 5.
+# Convention: T1 = hot channel, T2 = cold channel (ΔT = T2 − T1).
+# If an out-of-plane run shows an inverted ΔT/S sign, swap the two OUTPLANE
+# values below — that is the only change required.
+CH_INPLANE_T1 = 102
+CH_INPLANE_T2 = 104
+CH_OUTPLANE_T1 = 103
+CH_OUTPLANE_T2 = 105
+
+# 2700 channel that monitors the PK4-80M heater-supply output voltage (DC volts,
+# HI/LO across the supply output). Read alongside the thermocouples.
+CH_HEATER_VOLT = 116
+
+# ── Per-geometry heater limits (PK4-80M) ──────────────────────────────────────
+# Current-controlled (constant-current) drive with a per-mode voltage compliance
+# ceiling. The trapezoid is a CURRENT ramp; voltage = I × R_heater is the result
+# (monitored on CH_HEATER_VOLT). Compliance = operating range + headroom.
+#   In-plane : heater ≈10 Ω, ≤1.0 A, 0–10 V   → compliance 12 V
+#   Out-plane: heater higher-R, ≤1.3 A, 0–50 V → compliance 50 V
+HEATER_LIMITS = {
+    "in_plane":  {"current_max_A": 1.0, "voltage_compliance_V": 12.0},
+    "out_plane": {"current_max_A": 1.3, "voltage_compliance_V": 50.0},
+}
 
 class Keithley2182A:
     def __init__(self, resource_name: str = ADDR_2182A):
@@ -97,8 +123,26 @@ class Keithley2182A:
             print(f"Failed to read voltage from 2182A: {str(e)}")
             return None
 
-class PK160:
-    def __init__(self, resource_name: str = ADDR_PK160):
+class PK480M:
+    """Matsusada PK4-80M programmable DC supply (0–110 V), constant-current heater drive.
+
+    Command protocol (Matsusada PK/RK family, device address #1):
+        #1 REN              remote enable
+        #1 VSET <volts>     output voltage setpoint — in CC mode acts as the
+                            voltage COMPLIANCE ceiling (absolute volts)
+        #1 ISET <amps>      output current setpoint (absolute AMPERES)
+        #1 OCP  <percent>   over-current protection
+        #1 SW1 / #1 SW0     output on / off
+        #1 VMON / #1 IMON   read back actual output V / I (12-bit hex)
+
+    ⚠ BENCH-VERIFY before a real run: confirm the front panel shows the commanded
+      current when you send ``set_current_amps(0.5)`` (it should read ~0.5 A, not
+      0.5 mA and not 500 A). The previous PK160 driver scaled current to mA; this
+      driver sends AMPERES — the fail-safe direction (a wrong guess under-drives
+      and simply fails to heat, rather than over-driving the supply).
+    """
+
+    def __init__(self, resource_name: str = ADDR_PK480M):
         self.resource_name = resource_name
         self.instrument = None
         self.connected = False
@@ -116,17 +160,13 @@ class PK160:
             self.instrument = rm.open_resource(self.resource_name)
             self.instrument.timeout = 20000
             self.connected = True
-            logger.info(f"Connected to PK160 at {self.resource_name}")
-            print(f"Connected to PK160 at {self.resource_name}")
+            logger.info(f"Connected to PK4-80M at {self.resource_name}")
             return True
         except Exception as e:
             error_str = str(e)
-            logger.error(f"Failed to connect to PK160: {error_str}")
-            print(f"Failed to connect to PK160: {error_str}")
-            
+            logger.error(f"Failed to connect to PK4-80M: {error_str}")
             if "VI_ERROR_ALLOC" in error_str or "-1073807300" in error_str:
                 logger.error("VI_ERROR_ALLOC: Resource allocation failed. Check for other processes using this instrument.")
-            
             self.connected = False
             self.instrument = None
             return False
@@ -135,37 +175,48 @@ class PK160:
             try:
                 self.instrument.close()
             except Exception as e:
-                logger.warning(f"Error closing PK160 connection: {str(e)}")
+                logger.warning(f"Error closing PK4-80M connection: {str(e)}")
             finally:
                 self.instrument = None
                 self.connected = False
-                logger.info("Disconnected PK160")
-                print("Disconnected PK160")
-    def initialize(self):
+                logger.info("Disconnected PK4-80M")
+    def initialize(self, voltage_compliance_V: float = 12.0, ocp_percent: float = 100.0):
+        """Prepare the supply for a constant-current heater run.
+
+        voltage_compliance_V : voltage ceiling (absolute volts) — set per geometry
+                               (in-plane ~12 V, out-plane ~50 V).
+        ocp_percent          : over-current protection, percent of rating.
+        """
         if not self.connected:
             return False
         self.instrument.write("#1 REN")
-        self.instrument.write("#1 VCN 100")
-        self.instrument.write("#1 OCP 100")
-        self.instrument.write("#1 SW1")
-        logger.info("Initialized PK160")
-        print("Initialized PK160")
+        self.instrument.write(f"#1 VSET {voltage_compliance_V}")   # voltage compliance (volts)
+        self.instrument.write(f"#1 OCP {ocp_percent}")
+        self.instrument.write("#1 ISET 0")                         # start at zero current
+        self.instrument.write("#1 SW1")                            # output on (0 A → no heating)
+        logger.info("Initialized PK4-80M (V-compliance=%s V, OCP=%s%%)",
+                    voltage_compliance_V, ocp_percent)
         return True
-    def set_current(self, value: float):
-        """Set current setpoint. Value in mA sent to ISET (current setpoint, not voltage)."""
+    def set_current_amps(self, amps: float):
+        """Set the output current setpoint in AMPERES (ISET takes absolute amps)."""
         if not self.connected:
             return False
-        self.instrument.write(f"#1 ISET {value}")
-        logger.info(f"PK160 set current: {value}")
-        print(f"PK160 set current: {value}")
+        self.instrument.write(f"#1 ISET {amps}")
+        logger.info(f"PK4-80M set current: {amps} A")
         return True
+    # Backward-compat: old callers used set_current(mA). Route to amps.
+    def set_current(self, value: float):
+        return self.set_current_amps(value)
     def output_off(self):
         if not self.connected:
             return False
         self.instrument.write("#1 SW0")
-        logger.info("PK160 output off")
-        print("PK160 output off")
+        logger.info("PK4-80M output off")
         return True
+
+
+# Backward-compatibility alias — existing imports of ``PK160`` keep working.
+PK160 = PK480M
 
 class Keithley2700:
     def __init__(self, resource_name: str = ADDR_2700):
@@ -248,6 +299,27 @@ class Keithley2700:
             logger.error(f"Failed to take measurement on 2700: {str(e)}")
             print(f"Failed to take measurement on 2700: {str(e)}")
             return None
+    def read_dc_voltage(self, channel: int = CH_HEATER_VOLT) -> Optional[float]:
+        """Read a DC-volts channel (e.g. ch116 heater-supply monitor).
+
+        Assigns the DCV function to this channel only, then closes + reads it.
+        The thermocouple channels keep their TEMP function (per-channel :FUNC),
+        so this does not disturb the temperature reads. Fully guarded: any
+        failure returns None and the measurement loop carries on.
+        """
+        try:
+            if not self.connected:
+                return None
+            self.instrument.write(f":SENS:FUNC 'VOLT:DC',(@{channel})")
+            self.instrument.write(f":ROUT:CLOS (@{channel})")
+            time.sleep(0.05)
+            response = self.instrument.query(":READ?")
+            value = float(response.split(',')[0].split('_')[0].strip())
+            return value
+        except Exception as e:
+            logger.error(f"Failed to read DC voltage on 2700 ch{channel}: {e}")
+            return None
+
     def multi_channel_measurement(self, channels: List[int]) -> Dict[int, Optional[float]]:
         results = {}
         for ch in channels:
@@ -459,35 +531,64 @@ class Keithley6221:
 
 class SeebeckSystem:
     def __init__(self):
-        self.rm = pyvisa.ResourceManager()
+        # The VISA ResourceManager is created fresh on every connect_all() and
+        # closed on every disconnect_all(). Reusing a single long-lived RM does
+        # not fully release the GPIB resources between runs — recreating it is
+        # the in-process equivalent of restarting the application.
+        self.rm = None
         self.k2182a = Keithley2182A()
         self.k2700 = Keithley2700()
-        self.pk160 = PK160()
+        self.pk = PK480M()
+        self.pk160 = self.pk          # backward-compat alias
         self.k6221 = Keithley6221()
         self.connected = False
-        self.pk160_current_unit = "mA"  # UI and params in mA; if "A", we convert when sending to PK160
+        self.pk160_current_unit = "mA"  # UI/params unit (mA or A); converted to amps before ISET
+
+        # Per-geometry heater limits, set by the session manager before a run.
+        self.heater_voltage_compliance_V = HEATER_LIMITS["in_plane"]["voltage_compliance_V"]
+        self.heater_current_max_A = HEATER_LIMITS["in_plane"]["current_max_A"]
+        self.probe_mode = "in_plane"
     def connect_all(self):
         """Connect to all instruments. Returns True only if all connections succeed."""
+        # Always start from a fresh ResourceManager so no stale VISA state
+        # from a previous run can lock the instruments.
+        if self.rm is not None:
+            try:
+                self.rm.close()
+            except Exception:
+                pass
+            self.rm = None
+        try:
+            self.rm = pyvisa.ResourceManager()
+        except Exception as e:
+            logger.error(f"Failed to create VISA ResourceManager: {e}")
+            self.connected = False
+            return False
+
         results = {
             'k2182a': self.k2182a.connect(self.rm),
             'k2700': self.k2700.connect(self.rm),
             'pk160': self.pk160.connect(self.rm),
             'k6221': self.k6221.connect(self.rm)
         }
-        
+
         # Log connection status for each instrument
         for name, success in results.items():
             if not success:
                 logger.error(f"Failed to connect to {name}")
             else:
                 logger.info(f"Successfully connected to {name}")
-        
+
         ok = all(results.values())
         self.connected = ok
-        
+
         if not ok:
-            logger.error(f"Connection results: {results}. Not all instruments connected successfully.")
-        
+            # Release the instruments that DID connect, otherwise they stay
+            # locked to this process and the next attempt fails.
+            logger.error(f"Connection results: {results}. Not all instruments "
+                         f"connected; releasing partial connections.")
+            self.disconnect_all()
+
         return ok
     def disconnect_all(self):
         self.k2182a.disconnect()
@@ -495,28 +596,69 @@ class SeebeckSystem:
         self.pk160.disconnect()
         self.k6221.disconnect()
         self.connected = False
+        # Fully release the VISA layer — closing only the instrument sessions
+        # is not enough to free the GPIB resources for the next run.
+        if self.rm is not None:
+            try:
+                self.rm.close()
+            except Exception as e:
+                logger.warning(f"Error closing VISA ResourceManager: {e}")
+            self.rm = None
+    def set_heater_mode(self, probe_mode: str):
+        """Apply per-geometry heater limits (and route the relay) before a run.
+
+        Sets the voltage-compliance ceiling and current cap for the selected
+        geometry, and actuates the in-plane/out-plane relay. Call this BEFORE
+        initialize_all() so the compliance is applied at output-on.
+        """
+        mode = "out_plane" if str(probe_mode).lower() == "out_plane" else "in_plane"
+        limits = HEATER_LIMITS[mode]
+        self.probe_mode = mode
+        self.heater_voltage_compliance_V = limits["voltage_compliance_V"]
+        self.heater_current_max_A = limits["current_max_A"]
+        self.set_relay(mode)
+
+    def set_relay(self, probe_mode: str):
+        """Route the heater relay to the in-plane or out-plane setup.
+
+        ⚠ STUB — the relay is not wired yet. Today the operator connects the
+        correct setup manually. When the relay control path exists (2700 digital
+        I/O, a serial relay board, etc.), issue the select command here. The rest
+        of the system already calls this at the right point in the start sequence.
+        """
+        logger.info("Heater relay select: %s (relay not yet wired — manual setup)",
+                    probe_mode)
+
     def initialize_all(self):
         self.k2182a.configure()
         self.k2700.configure_measurement()
-        self.pk160.initialize()
+        # Apply the per-geometry voltage compliance at output-on.
+        self.pk.initialize(voltage_compliance_V=self.heater_voltage_compliance_V)
     def set_current(self, value: float):
-        # value is current in mA or A per pk160_current_unit. PK160 ISET expects current in mA (sending 200 = 200 mA).
-        # If we sent Amps (0.2) the supply would set 0.2 mA and temperature would not rise.
+        # value is the setpoint in the UI unit (mA or A); convert to AMPERES.
+        # PK4-80M ISET takes absolute amps (e.g. 1.0 = 1 A). The current cap is
+        # also enforced in the UI per geometry.
         unit = getattr(self, "pk160_current_unit", "mA")
-        send_value_mA = (value * 1000.0) if unit == "A" else value
-        self.pk160.set_current(send_value_mA)
+        amps = (value / 1000.0) if unit == "mA" else value
+        # Safety clamp to the per-mode current ceiling.
+        cap = getattr(self, "heater_current_max_A", None)
+        if cap is not None and amps > cap:
+            amps = cap
+        self.pk.set_current_amps(amps)
     def output_off(self):
-        self.pk160.output_off()
+        self.pk.output_off()
     def measure_all(self, temp1_channel=102, temp2_channel=104) -> Dict[str, Optional[float]]:
         # Acquisition order: V then T1 then T2 (staggered). For best accuracy, V and T
         # should be simultaneous; staggered acquisition can introduce several-% error in S.
         temf = self.k2182a.read_voltage()
         temp1 = self.k2700.take_measurement(channel=temp1_channel)
         temp2 = self.k2700.take_measurement(channel=temp2_channel)
+        heater_v = self.k2700.read_dc_voltage(channel=CH_HEATER_VOLT)
         return {
             "TEMF_mV": temf * 1000 if temf is not None else None,
             "Temp1_C": temp1,
-            "Temp2_C": temp2
+            "Temp2_C": temp2,
+            "HeaterV_V": heater_v,
         }
     
     # -------------------------------------------------------------------------

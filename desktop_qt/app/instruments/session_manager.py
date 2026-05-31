@@ -5,7 +5,11 @@ import json
 from datetime import datetime
 from typing import Optional, Dict, List, Any
 
-from .instrument import SeebeckSystem
+from .instrument import (
+    SeebeckSystem,
+    CH_INPLANE_T1, CH_INPLANE_T2,
+    CH_OUTPLANE_T1, CH_OUTPLANE_T2,
+)
 from .seebeck_analysis import binned_seebeck_analysis
 from ..core.database import get_session
 from ..models.db_models import Measurement, MeasurementRow, MeasurementIntegrity
@@ -38,6 +42,15 @@ class MeasurementSessionManager:
     def start_session(self, params: Dict):
         if self.session_active:
             return False  # Already running
+        # A previous worker thread may still be unwinding its cleanup (its
+        # finally block releases the instruments). Wait for it to finish
+        # before reconnecting, or the two runs race on the same VISA sessions.
+        if self.session_thread is not None and self.session_thread.is_alive():
+            self.session_thread.join(timeout=25)
+            if self.session_thread.is_alive():
+                logger.error("Previous session thread did not exit; cannot start.")
+                return False
+        self.session_thread = None
         self.session_active = True
         self.session_data = []
         self.session_status = "running"
@@ -52,22 +65,64 @@ class MeasurementSessionManager:
             "operator": params.get("operator"),
             "notes": params.get("notes"),
             "target_T0_K": params.get("target_T0_K"),
-            "probe_arrangement": params.get("probe_arrangement"),
+            "probe_arrangement": params.get("probe_arrangement")
+            or params.get("probe_mode"),
         }
         self.session_thread = threading.Thread(target=self._run_session, args=(params,))
         self.session_thread.start()
         return True
 
     def stop_session(self):
+        """Signal the worker to stop and wait for it to release the instruments.
+
+        The worker thread's ``finally`` block performs output_off +
+        disconnect_all itself. stop_session must NOT disconnect here as well,
+        or the two threads race on the same VISA sessions and leave them in a
+        corrupted, half-closed state.
+        """
         self.session_active = False
         self.session_status = "stopped"
         self.session_phase = None
         self.session_step = 0
         self.session_total_steps = 0
-        if self.session_thread:
-            self.session_thread.join(timeout=2)
-        self.seebeck_system.output_off()
-        self.seebeck_system.disconnect_all()
+        if self.session_thread is not None:
+            # Wait up to one VISA timeout so an in-flight instrument query can
+            # return and the worker can clean up. Normally returns in well
+            # under a second.
+            self.session_thread.join(timeout=25)
+            if self.session_thread.is_alive():
+                logger.warning(
+                    "Session thread still running after stop; instruments "
+                    "may not be fully released."
+                )
+            else:
+                self.session_thread = None
+
+    def cleanup(self):
+        """Force the manager back to a clean, disconnected state.
+
+        Used by the Seebeck page 'Reset' action. Safe to call when idle —
+        output_off / disconnect_all are no-ops on already-disconnected
+        instruments.
+        """
+        if self.session_active:
+            self.stop_session()
+        elif self.session_thread is not None and self.session_thread.is_alive():
+            self.session_thread.join(timeout=25)
+        self.session_thread = None
+        # Belt-and-braces release in case the worker never ran its finally.
+        try:
+            self.seebeck_system.output_off()
+        except Exception as exc:
+            logger.error("cleanup output_off failed: %s", exc)
+        try:
+            self.seebeck_system.disconnect_all()
+        except Exception as exc:
+            logger.error("cleanup disconnect_all failed: %s", exc)
+        self.session_status = "idle"
+        self.session_phase = None
+        self.session_step = 0
+        self.session_total_steps = 0
 
     def get_data(self) -> List[Dict]:
         with self.lock:
@@ -118,6 +173,13 @@ class MeasurementSessionManager:
                 logger.error("Failed to connect to instruments. Session aborted.")
                 return
             
+            # Apply per-geometry heater limits (voltage compliance + current cap)
+            # and route the relay BEFORE initialise, so compliance is set at
+            # output-on. Channel selection for the TCs happens further below.
+            _probe_mode_early = (params.get("probe_mode") or "in_plane").lower()
+            self.seebeck_system.pk160_current_unit = params.get("pk160_current_unit") or "mA"
+            self.seebeck_system.set_heater_mode(_probe_mode_early)
+
             # Initialize all instruments
             try:
                 self.seebeck_system.initialize_all()
@@ -125,8 +187,7 @@ class MeasurementSessionManager:
                 self.session_status = f"error: Failed to initialize instruments: {str(e)}"
                 self.session_active = False
                 logger.error(f"Failed to initialize instruments: {str(e)}")
-                self.seebeck_system.disconnect_all()
-                return
+                return  # instrument release handled by the finally block
             interval = params["interval"]
             pre_time = params["pre_time"]
             # start_volt/stop_volt: current setpoints I₀ and I (mA or A per pk160_current_unit), not voltage.
@@ -140,6 +201,19 @@ class MeasurementSessionManager:
             stabilization_delay_s = float(params.get("stabilization_delay_s") or 0.0)
             pk160_unit = params.get("pk160_current_unit") or "mA"
             self.seebeck_system.pk160_current_unit = pk160_unit
+
+            # Seebeck geometry: select the 2700 thermocouple channels.
+            # "in_plane"  -> channels 102 / 104   (default)
+            # "out_plane" -> channels 103 / 105
+            probe_mode = (params.get("probe_mode") or "in_plane").lower()
+            if probe_mode == "out_plane":
+                temp1_channel, temp2_channel = CH_OUTPLANE_T1, CH_OUTPLANE_T2
+            else:
+                temp1_channel, temp2_channel = CH_INPLANE_T1, CH_INPLANE_T2
+            logger.info(
+                "Seebeck geometry: %s (2700 channels T1=%s, T2=%s)",
+                probe_mode, temp1_channel, temp2_channel,
+            )
 
             # ── Create Measurement row in DB (if user/lab known) ─────────
             if self._db_user_id is not None and self._db_lab_id is not None:
@@ -238,7 +312,10 @@ class MeasurementSessionManager:
                         if not self.session_active:
                             break
                         time.sleep(0.1)
-                result = self.seebeck_system.measure_all()
+                result = self.seebeck_system.measure_all(
+                    temp1_channel=temp1_channel,
+                    temp2_channel=temp2_channel,
+                )
                 t1 = result["Temp1_C"] if result["Temp1_C"] is not None else 0.0
                 t2 = result["Temp2_C"] if result["Temp2_C"] is not None else 0.0
                 delta_t = t2 - t1
@@ -254,6 +331,7 @@ class MeasurementSessionManager:
                 # ΔT/T₀: differential method assumes small gradient; warn if large
                 delta_t_over_t0 = (abs(delta_t) / t0_k) if t0_k > 0 else None
                 branch = "cooling" if phase in ("ramp_down", "cooling_tail") else "heating"
+                heater_v = result.get("HeaterV_V")
                 row = {
                     "Time [s]": elapsed_time,
                     "TEMF [mV]": temf_mv,
@@ -264,6 +342,7 @@ class MeasurementSessionManager:
                     "T0 [K]": t0_k,
                     "delta_T_over_T0": round(delta_t_over_t0, 6) if delta_t_over_t0 is not None else None,
                     "S [µV/K]": s_uv_per_k,
+                    "Heater V [V]": round(heater_v, 4) if heater_v is not None else None,
                     "branch": branch,
                 }
                 with self.lock:
@@ -313,8 +392,7 @@ class MeasurementSessionManager:
                     if not self.session_active:
                         break
                     time.sleep(0.1)
-            self.seebeck_system.output_off()
-            self.seebeck_system.disconnect_all()
+            self.seebeck_system.output_off()  # heater off immediately
             self.session_status = "finished"
             self.session_active = False
             self.session_phase = None
@@ -369,3 +447,25 @@ class MeasurementSessionManager:
                 except Exception as exc:
                     logger.error("Failed to mark Measurement as error in DB: %s", exc)
                     db.rollback()
+        finally:
+            # Guaranteed cleanup on EVERY exit path — normal finish, Stop,
+            # error, and failed/partial connect. Without this the PK160 heater
+            # can be left ON and the GPIB instruments locked to this process,
+            # forcing an app + device restart.
+            try:
+                self.seebeck_system.output_off()
+            except Exception as exc:
+                logger.error("Cleanup output_off failed: %s", exc)
+            try:
+                self.seebeck_system.disconnect_all()
+            except Exception as exc:
+                logger.error("Cleanup disconnect_all failed: %s", exc)
+            self.session_active = False
+            self.session_phase = None
+            self.session_step = 0
+            self.session_total_steps = 0
+            if db is not None:
+                try:
+                    db.close()
+                except Exception:
+                    pass

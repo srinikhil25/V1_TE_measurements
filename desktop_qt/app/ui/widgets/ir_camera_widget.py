@@ -8,13 +8,14 @@ from __future__ import annotations
 
 import numpy as np
 from PyQt6.QtCore import Qt, QTimer, QThread, pyqtSignal
-from PyQt6.QtGui import QImage, QPixmap
+from PyQt6.QtGui import QImage, QPixmap, QPainter, QColor, QFont
 from PyQt6.QtWidgets import (
     QFrame, QHBoxLayout, QLabel, QPushButton, QVBoxLayout,
-    QFileDialog, QMessageBox,
+    QFileDialog, QMessageBox, QSizePolicy,
 )
 
 from ..theme import BORDER, CARD_BG, ERROR, PRIMARY, PRIMARY_HOVER, SUCCESS, WARNING, TEXT_MUTED, TEXT_PRIMARY
+from ..icons import pixmap as _icon_pixmap
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -154,10 +155,10 @@ class IrCameraWidget(QFrame):
         self._btn_capture.setFixedHeight(24)
         self._btn_capture.setCursor(Qt.CursorShape.PointingHandCursor)
         self._btn_capture.setStyleSheet(
-            "QPushButton { background: white; color: #0F172A; border: 1px solid #CBD5E1; "
+            "QPushButton { background: white; color: #1F2937; border: 1px solid #C7C0B0; "
             "border-radius: 5px; font-size: 11px; padding: 0 10px; }"
-            "QPushButton:hover { background: #F8FAFC; }"
-            "QPushButton:disabled { color: #CBD5E1; border-color: #E2E8F0; }"
+            "QPushButton:hover { background: #FBFAF5; }"
+            "QPushButton:disabled { color: #C7C0B0; border-color: #E6E1D6; }"
         )
         self._btn_capture.setEnabled(False)
         self._btn_capture.clicked.connect(self._capture_screenshot)
@@ -168,7 +169,10 @@ class IrCameraWidget(QFrame):
     def _build_view(self) -> QLabel:
         self._view = QLabel()
         self._view.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._view.setMinimumHeight(260)
+        self._view.setMinimumHeight(160)
+        # Expand to fill the (tall) IR tile column so the thermal view is
+        # large — the readings/colorbar stay pinned below it.
+        self._view.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self._view.setStyleSheet(
             f"background: #111827; border-radius: 5px; border: 1px solid {BORDER};"
         )
@@ -318,8 +322,23 @@ class IrCameraWidget(QFrame):
             lbl.setText("—")
 
     def _show_placeholder(self) -> None:
+        """Centered camera icon + guidance so the dark panel reads as idle, not broken."""
         self._view.clear()
-        self._view.setText('<span style="color:#94A3B8;font-size:12px;">No camera signal</span>')
+        w, h = 240, 132
+        pm = QPixmap(w, h)
+        pm.fill(Qt.GlobalColor.transparent)
+        p = QPainter(pm)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        cam = _icon_pixmap("camera", "#5B6472", 46, width=1.8)
+        p.drawPixmap((w - 46) // 2, 16, cam)
+        p.setPen(QColor("#9AA3AF"))
+        p.setFont(QFont("Segoe UI", 10, QFont.Weight.DemiBold))
+        p.drawText(0, 76, w, 18, Qt.AlignmentFlag.AlignHCenter, "No camera connected")
+        p.setPen(QColor("#6B7280"))
+        p.setFont(QFont("Segoe UI", 8))
+        p.drawText(0, 98, w, 16, Qt.AlignmentFlag.AlignHCenter, "Click Connect to begin")
+        p.end()
+        self._view.setPixmap(pm)
 
     def _style_btn(self, *, connected: bool) -> None:
         if connected:
@@ -327,7 +346,7 @@ class IrCameraWidget(QFrame):
             self._btn.setStyleSheet(
                 f"QPushButton {{ background:{ERROR}; color:white; border:none; "
                 f"border-radius:5px; font-size:11px; font-weight:600; padding:0 10px; }}"
-                f"QPushButton:hover {{ background:#B91C1C; }}"
+                f"QPushButton:hover {{ background:#883333; }}"
             )
         else:
             self._btn.setText("Connect")

@@ -131,7 +131,7 @@ class IVPage(QWidget):
 
         splitter = QSplitter(Qt.Orientation.Horizontal)
         splitter.setHandleWidth(1)
-        splitter.setStyleSheet("QSplitter::handle { background: #E5E7EB; }")
+        splitter.setStyleSheet("QSplitter::handle { background: #E2DED4; }")
 
         splitter.addWidget(self._build_left())
         splitter.addWidget(self._build_right())
@@ -251,8 +251,8 @@ class IVPage(QWidget):
         self.btn_run.setStyleSheet(
             f"QPushButton {{ background: {PRIMARY}; color: white; border: none; "
             f"border-radius: 7px; font-size: 13px; font-weight: 600; }}"
-            f"QPushButton:hover {{ background: #1D4ED8; }}"
-            f"QPushButton:disabled {{ background: #93C5FD; }}"
+            f"QPushButton:hover {{ background: #26606A; }}"
+            f"QPushButton:disabled {{ background: #8FB6BA; }}"
         )
         self.btn_run.clicked.connect(self._run)
         v.addWidget(self.btn_run)
@@ -262,8 +262,8 @@ class IVPage(QWidget):
         self.btn_abort.setStyleSheet(
             f"QPushButton {{ background: {ERROR}; color: white; border: none; "
             f"border-radius: 7px; font-size: 13px; font-weight: 600; }}"
-            f"QPushButton:hover {{ background: #B91C1C; }}"
-            f"QPushButton:disabled {{ background: #FCA5A5; }}"
+            f"QPushButton:hover {{ background: #883333; }}"
+            f"QPushButton:disabled {{ background: #D8B4B4; }}"
         )
         self.btn_abort.clicked.connect(self._abort)
         self.btn_abort.setEnabled(False)
@@ -363,7 +363,7 @@ class IVPage(QWidget):
         self.table.setStyleSheet(
             f"QTableWidget {{ background: {CARD_BG}; border: 1px solid {BORDER}; "
             f"border-radius: 6px; font-size: 12px; }}"
-            f"QTableWidget::item:alternate {{ background: #F9FAFB; }}"
+            f"QTableWidget::item:alternate {{ background: #FBFAF5; }}"
         )
         v.addWidget(self.table, stretch=1)
 

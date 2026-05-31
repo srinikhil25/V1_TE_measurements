@@ -101,7 +101,7 @@ class UsersPage(QWidget):
         self.btn_add.setStyleSheet(
             f"QPushButton {{ background: {PRIMARY}; color: white; border: none; "
             f"border-radius: 6px; padding: 0 16px; font-size: 13px; font-weight: 600; }}"
-            f"QPushButton:hover {{ background: #1D4ED8; }}"
+            f"QPushButton:hover {{ background: #26606A; }}"
         )
         self.btn_add.clicked.connect(self._add_user)
         hdr.addWidget(self.btn_add)
@@ -122,7 +122,7 @@ class UsersPage(QWidget):
         self.table.setStyleSheet(
             f"QTableWidget {{ background: {CARD_BG}; border: 1px solid {BORDER}; "
             f"border-radius: 8px; font-size: 13px; }}"
-            f"QTableWidget::item:alternate {{ background: #F9FAFB; }}"
+            f"QTableWidget::item:alternate {{ background: #FBFAF5; }}"
         )
         v.addWidget(self.table)
 
