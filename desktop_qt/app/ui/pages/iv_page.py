@@ -10,14 +10,24 @@ from typing import List, Dict, Optional
 
 from PyQt6.QtWidgets import (
     QWidget, QHBoxLayout, QVBoxLayout, QLabel, QPushButton,
-    QFrame, QDoubleSpinBox, QSpinBox, QSplitter,
+    QFrame, QDoubleSpinBox, QSpinBox, QSplitter, QAbstractSpinBox,
     QScrollArea, QTableWidget, QTableWidgetItem, QHeaderView,
     QMessageBox, QLineEdit, QComboBox, QCheckBox, QGridLayout,
-    QFileDialog,
+    QFileDialog, QRadioButton, QButtonGroup,
 )
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
 
+# Display-unit scaling for the "Data handling" radios. Data is stored in SI
+# (amps, volts); displayed value = SI * scale.
+_V_UNITS = [("V", 1.0), ("mV", 1e3), ("µV", 1e6)]
+_I_UNITS = [("A", 1.0), ("mA", 1e3), ("µA", 1e6), ("nA", 1e9)]
+
+import os
+import tempfile
+
 import pyqtgraph as pg
+from openpyxl import Workbook
+from openpyxl.drawing.image import Image as XLImage
 
 from ..theme import (
     CARD_BG, BORDER, CONTENT_BG, PRIMARY,
@@ -80,12 +90,34 @@ def _section_label(text: str) -> QLabel:
     return lbl
 
 
+def _flabel(text: str) -> QLabel:
+    lbl = QLabel(text)
+    lbl.setStyleSheet(
+        f"color: {TEXT_MUTED}; font-size: 11px; font-weight: 600; "
+        f"letter-spacing: 0.3px; border: none;"
+    )
+    return lbl
+
+
 def _field(label: str, widget: QWidget, layout: QVBoxLayout):
-    lbl = QLabel(label)
-    lbl.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 12px; border: none;")
-    layout.addWidget(lbl)
+    layout.addWidget(_flabel(label))
+    layout.addSpacing(4)
     layout.addWidget(widget)
-    layout.addSpacing(8)
+    layout.addSpacing(12)
+
+
+def _row2(label1, w1, label2, w2, layout: QVBoxLayout):
+    """Two fields side by side — for natural pairs (Start/Stop, limits)."""
+    row = QHBoxLayout()
+    row.setSpacing(12)
+    for lbl, w in ((label1, w1), (label2, w2)):
+        col = QVBoxLayout()
+        col.setSpacing(4)
+        col.addWidget(_flabel(lbl))
+        col.addWidget(w)
+        row.addLayout(col)
+    layout.addLayout(row)
+    layout.addSpacing(12)
 
 
 def _spinbox(lo, hi, val, decimals=2, suffix="") -> QDoubleSpinBox:
@@ -95,7 +127,9 @@ def _spinbox(lo, hi, val, decimals=2, suffix="") -> QDoubleSpinBox:
     sb.setDecimals(decimals)
     if suffix:
         sb.setSuffix(f"  {suffix}")
-    sb.setFixedHeight(36)
+    sb.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)  # no broken stepper box
+    sb.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+    sb.setFixedHeight(40)
     return sb
 
 
@@ -103,7 +137,9 @@ def _ispinbox(lo, hi, val) -> QSpinBox:
     sb = QSpinBox()
     sb.setRange(lo, hi)
     sb.setValue(val)
-    sb.setFixedHeight(36)
+    sb.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
+    sb.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+    sb.setFixedHeight(40)
     return sb
 
 
@@ -120,6 +156,10 @@ class IVPage(QWidget):
         self._abort_flag = type("AbortFlag", (), {"abort_requested": False})()
         self._results: List[Dict] = []
         self._result_summary: Dict = {}  # fit_R, fit_R_squared, ohmic_status, temperature_C
+        # Display units / graph format (set by the Data handling radios).
+        self._v_unit, self._v_scale = "V", 1.0
+        self._i_unit, self._i_scale = "A", 1.0
+        self._show_fit = True
         self._build_ui()
 
     # ------------------------------------------------------------------
@@ -181,81 +221,121 @@ class IVPage(QWidget):
         cl.addWidget(self.le_notes)
         v.addWidget(card)
 
-        # Sweep parameters
+        # ── Measurement (sweep setup + compliance + run) ──────────────────
         card2 = _card()
         c2 = QVBoxLayout(card2)
         c2.setContentsMargins(16, 14, 16, 14)
         c2.setSpacing(0)
-        c2.addWidget(_section_label("SWEEP PARAMETERS"))
+        c2.addWidget(_section_label("MEASUREMENT"))
         c2.addSpacing(10)
 
         self.cb_source_mode = QComboBox()
-        self.cb_source_mode.addItems(["Current (4-probe)", "Voltage (2-probe)"])
-        self.cb_source_mode.setFixedHeight(36)
+        self.cb_source_mode.addItems(["Source Current (measure V)", "Source Voltage (measure I)"])
+        self.cb_source_mode.setFixedHeight(40)
         self.cb_source_mode.currentIndexChanged.connect(self._on_source_mode_changed)
         _field("Source mode", self.cb_source_mode, c2)
 
+        self.cb_four_wire = QCheckBox("4-wire sense (remote) — needs sense leads")
+        self.cb_four_wire.setChecked(False)
+        c2.addWidget(self.cb_four_wire)
+        c2.addSpacing(12)
+
         self.sb_start = _spinbox(-1.0, 1.0, -0.01, 4, "A")
         self.sb_stop = _spinbox(-1.0, 1.0, 0.01, 4, "A")
-        _field("Start (A or V)", self.sb_start, c2)
-        _field("Stop (A or V)", self.sb_stop, c2)
+        _row2("Start", self.sb_start, "Stop", self.sb_stop, c2)
 
         self.sb_points = _ispinbox(2, 500, 21)
-        _field("Points", self.sb_points, c2)
+        _field("Number of points", self.sb_points, c2)
 
         self.cb_bidirectional = QCheckBox("Bidirectional (forward + reverse)")
         self.cb_bidirectional.setChecked(False)
-        self.cb_bidirectional.setStyleSheet(f"color: {TEXT_SECONDARY};")
         c2.addWidget(self.cb_bidirectional)
-        c2.addSpacing(8)
+        c2.addSpacing(12)
 
         self.sb_delay = _spinbox(1, 5000, 50.0, 1, "ms")
-        _field("Step delay", self.sb_delay, c2)
-
         self.sb_nplc = _spinbox(0.01, 10, 5.0, 2, "NPLC")
-        _field("Integration (NPLC)", self.sb_nplc, c2)
+        _row2("Step delay", self.sb_delay, "Integration", self.sb_nplc, c2)
 
-        v.addWidget(card2)
-
-        # Compliance
-        card3 = _card()
-        c3 = QVBoxLayout(card3)
-        c3.setContentsMargins(16, 14, 16, 14)
-        c3.setSpacing(0)
-        c3.addWidget(_section_label("COMPLIANCE"))
-        c3.addSpacing(10)
         self.sb_ilimit = _spinbox(1e-6, 1.0, 0.1, 4, "A")
         self.sb_vlimit = _spinbox(0.1, 21, 21.0, 1, "V")
-        _field("Current limit", self.sb_ilimit, c3)
-        _field("Voltage limit", self.sb_vlimit, c3)
-        v.addWidget(card3)
+        _row2("Current limit", self.sb_ilimit, "Voltage limit", self.sb_vlimit, c2)
 
-        # Sample dimensions (mm)
-        card4 = _card()
-        c4 = QVBoxLayout(card4)
-        c4.setContentsMargins(16, 14, 16, 14)
-        c4.setSpacing(0)
-        c4.addWidget(_section_label("SAMPLE DIMENSIONS  (optional)"))
-        c4.addSpacing(10)
-        self.sb_length_mm = _spinbox(0.001, 1000, 10.0, 3, "mm")
-        self.sb_width_mm = _spinbox(0.001, 1000, 5.0, 3, "mm")
-        self.sb_thickness_mm = _spinbox(0.001, 100, 1.0, 3, "mm")
-        _field("Length", self.sb_length_mm, c4)
-        _field("Width", self.sb_width_mm, c4)
-        _field("Thickness", self.sb_thickness_mm, c4)
-        v.addWidget(card4)
-
-        # Run / Abort
-        self.btn_run = QPushButton("▶  Run IV Sweep")
+        self.btn_run = QPushButton("▶  Run sweep")
         self.btn_run.setFixedHeight(42)
         self.btn_run.setStyleSheet(
             f"QPushButton {{ background: {PRIMARY}; color: white; border: none; "
-            f"border-radius: 7px; font-size: 13px; font-weight: 600; }}"
+            f"border-radius: 7px; font-size: 14px; font-weight: 600; }}"
             f"QPushButton:hover {{ background: #26606A; }}"
             f"QPushButton:disabled {{ background: #8FB6BA; }}"
         )
         self.btn_run.clicked.connect(self._run)
-        v.addWidget(self.btn_run)
+        c2.addWidget(self.btn_run)
+        v.addWidget(card2)
+
+        # ── Data handling (display units + graph format) ──────────────────
+        card_dh = _card()
+        cdh = QVBoxLayout(card_dh)
+        cdh.setContentsMargins(16, 14, 16, 14)
+        cdh.setSpacing(0)
+        cdh.addWidget(_section_label("DATA HANDLING"))
+        cdh.addSpacing(10)
+
+        cdh.addWidget(_flabel("Voltage unit"))
+        cdh.addSpacing(4)
+        self.grp_vunit = QButtonGroup(self)
+        cdh.addLayout(self._radio_row(self.grp_vunit, [u for u, _ in _V_UNITS], checked=0))
+        cdh.addSpacing(12)
+
+        cdh.addWidget(_flabel("Current unit"))
+        cdh.addSpacing(4)
+        self.grp_iunit = QButtonGroup(self)
+        cdh.addLayout(self._radio_row(self.grp_iunit, [u for u, _ in _I_UNITS], checked=0))
+        cdh.addSpacing(12)
+
+        cdh.addWidget(_flabel("Graph format"))
+        cdh.addSpacing(4)
+        self.grp_fmt = QButtonGroup(self)
+        fmt_col = QVBoxLayout()
+        fmt_col.setSpacing(5)
+        for i, txt in enumerate(["Scatter plot", "Scatter plot + linear fit"]):
+            rb = QRadioButton(txt)
+            if i == 1:
+                rb.setChecked(True)
+            self.grp_fmt.addButton(rb, i)
+            fmt_col.addWidget(rb)
+        cdh.addLayout(fmt_col)
+        for grp in (self.grp_vunit, self.grp_iunit, self.grp_fmt):
+            grp.buttonClicked.connect(self._apply_units)
+        v.addWidget(card_dh)
+
+        # ── Sample geometry + dimensions (cm) — for resistivity ───────────
+        card4 = _card()
+        c4 = QVBoxLayout(card4)
+        c4.setContentsMargins(16, 14, 16, 14)
+        c4.setSpacing(0)
+        c4.addWidget(_section_label("SAMPLE GEOMETRY  (for resistivity)"))
+        c4.addSpacing(10)
+        self.cb_geometry = QComboBox()
+        self.cb_geometry.addItems(["Rectangular bar  (ρ = R·A/L)",
+                                   "Van der Pauw  (arbitrary shape)",
+                                   "4-point probe (in-line)"])
+        self.cb_geometry.setFixedHeight(40)
+        self.cb_geometry.currentIndexChanged.connect(self._on_geometry_changed)
+        _field("Shape", self.cb_geometry, c4)
+        self.sb_length_cm = _spinbox(0.0001, 100, 1.0, 4, "cm")
+        self.sb_width_cm = _spinbox(0.0001, 100, 0.5, 4, "cm")
+        self.sb_spacing_cm = _spinbox(0.0001, 10, 0.1, 4, "cm")
+        self.sb_thickness_cm = _spinbox(0.0001, 10, 0.0525, 4, "cm")
+        _row2("Length", self.sb_length_cm, "Width", self.sb_width_cm, c4)
+        _row2("Probe spacing", self.sb_spacing_cm, "Thickness", self.sb_thickness_cm, c4)
+        self.lbl_geom_hint = QLabel("")
+        self.lbl_geom_hint.setWordWrap(True)
+        self.lbl_geom_hint.setStyleSheet(
+            f"color: {TEXT_MUTED}; font-size: 11px; border: none;"
+        )
+        c4.addWidget(self.lbl_geom_hint)
+        v.addWidget(card4)
+        self._on_geometry_changed()
 
         self.btn_abort = QPushButton("⏹  Abort")
         self.btn_abort.setFixedHeight(42)
@@ -297,6 +377,84 @@ class IVPage(QWidget):
             self.sb_start.setValue(-1.0)
             self.sb_stop.setValue(1.0)
 
+    def _on_geometry_changed(self):
+        idx = self.cb_geometry.currentIndex()   # 0 bar, 1 vdp, 2 4pp
+        is_bar = idx == 0
+        is_4pp = idx == 2
+        # Enable the dimensions each method uses. 4pp now uses length/width too,
+        # for the finite-sheet geometric correction.
+        self.sb_length_cm.setEnabled(is_bar or is_4pp)
+        self.sb_width_cm.setEnabled(is_bar or is_4pp)
+        self.sb_spacing_cm.setEnabled(is_4pp)
+        if idx == 1:
+            self.lbl_geom_hint.setText(
+                "Van der Pauw — for arbitrary flat shapes of uniform thickness "
+                "(4 contacts on the edge). ρ = (π·t / ln2)·R. Needs thickness only."
+            )
+        elif is_4pp:
+            self.lbl_geom_hint.setText(
+                "In-line 4-point probe — outer pins force current, inner pins sense "
+                "voltage. ρ = (π/ln2)·t·R, auto-corrected for finite thickness and "
+                "sample size. Enter probe spacing, thickness, and sample length × width."
+            )
+        else:
+            self.lbl_geom_hint.setText(
+                "Rectangular bar — uniform, unidirectional current. "
+                "ρ = R·(W·t)/L. Needs length, width and thickness."
+            )
+
+    def _radio_row(self, group: QButtonGroup, labels, checked=0) -> QHBoxLayout:
+        row = QHBoxLayout()
+        row.setSpacing(16)
+        for i, txt in enumerate(labels):
+            rb = QRadioButton(txt)
+            if i == checked:
+                rb.setChecked(True)
+            group.addButton(rb, i)
+            row.addWidget(rb)
+        row.addStretch()
+        return row
+
+    def _apply_units(self):
+        """Apply the Data-handling radios: rescale axes, chart and table."""
+        vi = self.grp_vunit.checkedId()
+        ii = self.grp_iunit.checkedId()
+        self._v_unit, self._v_scale = _V_UNITS[vi] if 0 <= vi < len(_V_UNITS) else ("V", 1.0)
+        self._i_unit, self._i_scale = _I_UNITS[ii] if 0 <= ii < len(_I_UNITS) else ("A", 1.0)
+        self._show_fit = (self.grp_fmt.checkedId() == 1)
+        self.chart.getAxis("left").enableAutoSIPrefix(False)
+        self.chart.getAxis("bottom").enableAutoSIPrefix(False)
+        self.chart.setLabel("left", f"Current ({self._i_unit})")
+        self.chart.setLabel("bottom", f"Voltage ({self._v_unit})")
+        self._replot()
+        if self._results:
+            self._fill_table()
+
+    def _replot(self):
+        """Redraw scatter + fit line from self._results using current units."""
+        vs, is_ = self._v_scale, self._i_scale
+        pts = [p for p in self._results
+               if p.get("voltage") is not None and p.get("current") is not None]
+        npts = self.sb_points.value()
+        if self.cb_bidirectional.isChecked() and len(pts) > npts:
+            fwd, rev = pts[:npts], pts[npts:]
+        else:
+            fwd, rev = pts, []
+        self.scatter_fwd.setData([p["voltage"] * vs for p in fwd],
+                                 [p["current"] * is_ for p in fwd],
+                                 brush=pg.mkBrush(PRIMARY + "CC"))
+        self.scatter_rev.setData([p["voltage"] * vs for p in rev],
+                                 [p["current"] * is_ for p in rev],
+                                 brush=pg.mkBrush(WARNING + "CC"))
+        R = self._result_summary.get("fit_R")
+        if self._show_fit and R is not None and abs(R) > 1e-12 and pts:
+            ys = [p["current"] for p in pts]
+            i_lo, i_hi = min(ys), max(ys)
+            self.fit_line.setData([R * i_lo * vs, R * i_hi * vs],
+                                  [i_lo * is_, i_hi * is_])
+        else:
+            self.fit_line.setData([], [])
+
     def _build_right(self) -> QWidget:
         panel = QWidget()
         panel.setStyleSheet(f"background: {CONTENT_BG};")
@@ -308,8 +466,10 @@ class IVPage(QWidget):
 
         self.chart = pg.PlotWidget()
         self.chart.setBackground("white")
-        self.chart.setLabel("left", "Current", units="A")
-        self.chart.setLabel("bottom", "Voltage", units="V")
+        self.chart.getAxis("left").enableAutoSIPrefix(False)
+        self.chart.getAxis("bottom").enableAutoSIPrefix(False)
+        self.chart.setLabel("left", "Current (A)")
+        self.chart.setLabel("bottom", "Voltage (V)")
         self.chart.setTitle("I-V Characteristic")
         self.chart.showGrid(x=True, y=True, alpha=0.3)
         self.chart.setMinimumHeight(320)
@@ -332,10 +492,16 @@ class IVPage(QWidget):
         self.lbl_R = QLabel("R: —")
         self.lbl_rho = QLabel("ρ: —")
         self.lbl_sigma = QLabel("σ: —")
+        self.lbl_cf = QLabel("CF: —")
+        self.lbl_cf.setToolTip(
+            "Smits 4-point-probe geometric correction factor.\n"
+            "CF = (π/ln2)·C_size  →  4.532 for an infinite sheet, less for a finite one."
+        )
         self.lbl_R2 = QLabel("R²: —")
         self.lbl_ohmic = QLabel("—")
         self.lbl_T = QLabel("T: —")
-        for w in (self.lbl_R, self.lbl_rho, self.lbl_sigma, self.lbl_R2, self.lbl_ohmic, self.lbl_T):
+        for w in (self.lbl_R, self.lbl_rho, self.lbl_sigma, self.lbl_cf,
+                  self.lbl_R2, self.lbl_ohmic, self.lbl_T):
             w.setStyleSheet(
                 f"color: {TEXT_PRIMARY}; font-size: 12px; font-weight: 600; "
                 f"padding: 6px 10px; background: {CARD_BG}; border-radius: 6px; "
@@ -344,6 +510,7 @@ class IVPage(QWidget):
         cards_row.addWidget(self.lbl_R)
         cards_row.addWidget(self.lbl_rho)
         cards_row.addWidget(self.lbl_sigma)
+        cards_row.addWidget(self.lbl_cf)
         cards_row.addWidget(self.lbl_R2)
         cards_row.addWidget(self.lbl_ohmic)
         cards_row.addWidget(self.lbl_T)
@@ -355,7 +522,7 @@ class IVPage(QWidget):
         self.table = QTableWidget(0, 6)
         self.table.setHorizontalHeaderLabels(
             ["Current (A)", "Voltage (V)", "Resistance (Ω)", "Power (mW)",
-             "Resistivity (Ω·m)", "Conductivity (S/m)"]
+             "Resistivity (Ω·cm)", "Conductivity (S/cm)"]
         )
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
@@ -369,12 +536,12 @@ class IVPage(QWidget):
 
         # Export
         export_row = QHBoxLayout()
-        self.btn_export_csv = QPushButton("Save CSV…")
+        self.btn_export_csv = QPushButton("Save Data…")
         self.btn_export_csv.setStyleSheet(
             f"QPushButton {{ background: {CARD_BG}; color: {TEXT_PRIMARY}; "
             f"border: 1px solid {BORDER}; border-radius: 6px; padding: 8px 14px; }}"
         )
-        self.btn_export_csv.clicked.connect(self._export_csv)
+        self.btn_export_csv.clicked.connect(self._export_data)
         self.btn_save_graph = QPushButton("Save graph…")
         self.btn_save_graph.setStyleSheet(
             f"QPushButton {{ background: {CARD_BG}; color: {TEXT_PRIMARY}; "
@@ -408,9 +575,11 @@ class IVPage(QWidget):
         is_current_mode = self.cb_source_mode.currentIndex() == 0
         start = self.sb_start.value()
         stop = self.sb_stop.value()
-        length_m = self.sb_length_mm.value() / 1000.0 if self.sb_length_mm.value() > 1e-6 else None
-        width_m = self.sb_width_mm.value() / 1000.0 if self.sb_width_mm.value() > 1e-6 else None
-        thickness_m = self.sb_thickness_mm.value() / 1000.0 if self.sb_thickness_mm.value() > 1e-6 else None
+        length_cm = self.sb_length_cm.value() if self.sb_length_cm.value() > 1e-9 else None
+        width_cm = self.sb_width_cm.value() if self.sb_width_cm.value() > 1e-9 else None
+        thickness_cm = self.sb_thickness_cm.value() if self.sb_thickness_cm.value() > 1e-9 else None
+        spacing_cm = self.sb_spacing_cm.value() if self.sb_spacing_cm.value() > 1e-9 else None
+        geometry = {0: "bar", 1: "vdp", 2: "4pp"}.get(self.cb_geometry.currentIndex(), "bar")
 
         try:
             user = self._user
@@ -429,9 +598,12 @@ class IVPage(QWidget):
             current_limit=self.sb_ilimit.value(),
             voltage_limit=self.sb_vlimit.value(),
             nplc=self.sb_nplc.value(),
-            length=length_m,
-            width=width_m,
-            thickness=thickness_m,
+            four_wire=self.cb_four_wire.isChecked(),
+            length=length_cm,
+            width=width_cm,
+            thickness=thickness_cm,
+            geometry=geometry,
+            spacing=spacing_cm,
             sample_id=self.le_sample_id.text().strip() or None,
             operator=self.le_operator.text().strip() or None,
             notes=self.le_notes.text().strip() or None,
@@ -451,21 +623,7 @@ class IVPage(QWidget):
 
     def _on_progress(self, index: int, point: Dict):
         self._results.append(point)
-        n_fwd = self.sb_points.value()
-        fwd_pts = [p for p in self._results[:n_fwd] if p.get("voltage") is not None and p.get("current") is not None]
-        rev_pts = [p for p in self._results[n_fwd:] if p.get("voltage") is not None and p.get("current") is not None]
-        if fwd_pts:
-            self.scatter_fwd.setData(
-                [p["voltage"] for p in fwd_pts],
-                [p["current"] for p in fwd_pts],
-                brush=pg.mkBrush(PRIMARY + "CC"),
-            )
-        if rev_pts:
-            self.scatter_rev.setData(
-                [p["voltage"] for p in rev_pts],
-                [p["current"] for p in rev_pts],
-                brush=pg.mkBrush(WARNING + "CC"),
-            )
+        self._replot()
         self.lbl_status.setText(f"Point {index + 1}…")
 
     def _on_done(self, result: Dict):
@@ -479,34 +637,7 @@ class IVPage(QWidget):
             "temperature_C": result.get("temperature_C"),
         }
 
-        xs = [p["voltage"] for p in self._results if p.get("voltage") is not None]
-        ys = [p["current"] for p in self._results if p.get("current") is not None]
-        if xs and ys:
-            n_fwd = self.sb_points.value()
-            if self.cb_bidirectional.isChecked():
-                n_fwd = (self.sb_points.value() - 1) * 2 + 1
-                fwd_x = xs[:self.sb_points.value()]
-                fwd_y = ys[:self.sb_points.value()]
-                rev_x = xs[self.sb_points.value():]
-                rev_y = ys[self.sb_points.value():]
-                self.scatter_fwd.setData(fwd_x, fwd_y, brush=pg.mkBrush(PRIMARY + "CC"))
-                self.scatter_rev.setData(rev_x, rev_y, brush=pg.mkBrush(WARNING + "CC"))
-            else:
-                self.scatter_fwd.setData(xs, ys, brush=pg.mkBrush(PRIMARY + "CC"))
-                self.scatter_rev.setData([], [])
-
-            # Fit line V = R*I
-            R = result.get("fit_R")
-            if R is not None and abs(R) > 1e-12:
-                I_min, I_max = min(ys), max(ys)
-                I_fit = [I_min, I_max]
-                V_fit = [R * i for i in I_fit]
-                self.fit_line.setData(V_fit, I_fit)
-            else:
-                self.fit_line.setData([], [])
-        else:
-            self.fit_line.setData([], [])
-
+        self._replot()
         self._update_metric_cards()
         self._fill_table()
 
@@ -528,17 +659,39 @@ class IVPage(QWidget):
         self.lbl_R.setText(f"R: {R:.6g} Ω" if R is not None else "R: —")
         rho = None
         sigma = None
+        cf = None                                              # 4-point-probe correction factor
         if self._results and R is not None:
-            length_m = self.sb_length_mm.value() / 1000.0 if self.sb_length_mm.value() > 1e-6 else None
-            width_m = self.sb_width_mm.value() / 1000.0 if self.sb_width_mm.value() > 1e-6 else None
-            thickness_m = self.sb_thickness_mm.value() / 1000.0 if self.sb_thickness_mm.value() > 1e-6 else None
-            if length_m and width_m and thickness_m:
-                area = width_m * thickness_m
-                if area > 0:
-                    rho = R * area / length_m
-                    sigma = 1.0 / rho if rho else None
-        self.lbl_rho.setText(f"ρ: {rho:.4e} Ω·m" if rho is not None else "ρ: —")
-        self.lbl_sigma.setText(f"σ: {sigma:.4e} S/m" if sigma is not None else "σ: —")
+            import math
+            idx = self.cb_geometry.currentIndex()
+            t_cm = self.sb_thickness_cm.value() if self.sb_thickness_cm.value() > 1e-9 else None
+            if idx == 1:                                       # van der Pauw
+                if t_cm:
+                    rho = (math.pi * t_cm / math.log(2)) * R
+            elif idx == 2:                                     # in-line 4-point probe
+                s_cm = self.sb_spacing_cm.value() if self.sb_spacing_cm.value() > 1e-9 else None
+                l_cm = self.sb_length_cm.value() if self.sb_length_cm.value() > 1e-9 else None
+                w_cm = self.sb_width_cm.value() if self.sb_width_cm.value() > 1e-9 else None
+                if t_cm:
+                    from ...services.measurement_service import collinear_4pp_size_factor
+                    c_size = collinear_4pp_size_factor(s_cm, l_cm, w_cm)
+                    cf = (math.pi / math.log(2)) * c_size      # Smits CF (chart value)
+                    rho = (math.pi / math.log(2)) * t_cm * R   # thin, infinite sheet
+                    if s_cm:                                   # smooth thickness factor
+                        ts = t_cm / s_cm
+                        denom = math.log(math.sinh(ts) / math.sinh(ts / 2.0))
+                        if denom > 0:
+                            rho *= math.log(2) / denom
+                    rho *= c_size                              # finite-sheet correction
+            else:                                              # rectangular bar
+                l_cm = self.sb_length_cm.value() if self.sb_length_cm.value() > 1e-9 else None
+                w_cm = self.sb_width_cm.value() if self.sb_width_cm.value() > 1e-9 else None
+                if l_cm and w_cm and t_cm and l_cm > 0:
+                    rho = R * (w_cm * t_cm) / l_cm
+            sigma = (1.0 / rho) if rho else None
+        self._iv_cf = cf
+        self.lbl_rho.setText(f"ρ: {rho:.4e} Ω·cm" if rho is not None else "ρ: —")
+        self.lbl_sigma.setText(f"σ: {sigma:.4e} S/cm" if sigma is not None else "σ: —")
+        self.lbl_cf.setText(f"CF: {cf:.3f}" if cf is not None else "CF: —")
         self.lbl_R2.setText(f"R²: {R2:.4f}" if R2 is not None else "R²: —")
 
         if status == "ohmic":
@@ -569,6 +722,12 @@ class IVPage(QWidget):
         self.lbl_T.setText(f"T: {T:.1f} °C" if T is not None else "T: —")
 
     def _fill_table(self):
+        # Headers carry the chosen display units for current and voltage.
+        self.table.setHorizontalHeaderLabels([
+            f"Current ({self._i_unit})", f"Voltage ({self._v_unit})",
+            "Resistance (Ω)", "Power (mW)",
+            "Resistivity (Ω·cm)", "Conductivity (S/cm)",
+        ])
         self.table.setRowCount(len(self._results))
         for row, pt in enumerate(self._results):
             def fmt(v):
@@ -580,11 +739,12 @@ class IVPage(QWidget):
             v = pt.get("voltage")
             r = pt.get("resistance")
             p_mw = (v * i * 1000) if (v is not None and i is not None) else None
-            rho = pt.get("resistivity")
-            sigma = pt.get("conductivity")
+            i_disp = i * self._i_scale if i is not None else None
+            v_disp = v * self._v_scale if v is not None else None
 
-            for col, val in enumerate([i, v, r, p_mw, rho, sigma]):
-                item = QTableWidgetItem(fmt(val) if val is not None else "—")
+            for col, val in enumerate([i_disp, v_disp, r, p_mw,
+                                       pt.get("resistivity"), pt.get("conductivity")]):
+                item = QTableWidgetItem(fmt(val))
                 item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
                 self.table.setItem(row, col, item)
 
@@ -598,37 +758,98 @@ class IVPage(QWidget):
             "Check that all instruments are connected and try again."
         )
 
-    def _export_csv(self):
+    def _table_rows(self):
+        """(headers, rows) shared by the CSV and Excel exporters."""
+        headers = ["Current (A)", "Voltage (V)", "Resistance (Ohm)", "Power (mW)",
+                   "Resistivity (Ohm.cm)", "Conductivity (S/cm)"]
+        rows = []
+        for pt in self._results:
+            i = pt.get("current")
+            v = pt.get("voltage")
+            r = pt.get("resistance")
+            p = (v * i * 1000) if (v is not None and i is not None) else None
+            rows.append([i, v, r, p, pt.get("resistivity"), pt.get("conductivity")])
+        return headers, rows
+
+    def _export_data(self):
+        """Save the sweep. Excel (.xlsx) embeds the I-V graph; CSV is data-only."""
         if not self._results:
             QMessageBox.information(self, "Export", "No data to export. Run a sweep first.")
             return
-        path, _ = QFileDialog.getSaveFileName(
-            self, "Save IV data as CSV", "", "CSV (*.csv)"
+        path, selected_filter = QFileDialog.getSaveFileName(
+            self, "Save IV data", "iv_data.xlsx",
+            "Excel workbook (*.xlsx);;CSV file (*.csv)",
         )
         if not path:
             return
         try:
-            import csv
-            with open(path, "w", newline="", encoding="utf-8") as f:
-                w = csv.writer(f)
-                w.writerow(["Current_A", "Voltage_V", "Resistance_Ohm", "Power_mW",
-                            "Resistivity_Ohm_m", "Conductivity_S_m"])
-                for pt in self._results:
-                    i = pt.get("current")
-                    v = pt.get("voltage")
-                    r = pt.get("resistance")
-                    p = (v * i * 1000) if (v is not None and i is not None) else None
-                    w.writerow([
-                        i if i is not None else "",
-                        v if v is not None else "",
-                        r if r is not None else "",
-                        p if p is not None else "",
-                        pt.get("resistivity") or "",
-                        pt.get("conductivity") or "",
-                    ])
-            QMessageBox.information(self, "Export", f"Saved to {path}")
+            if selected_filter.startswith("CSV") or path.lower().endswith(".csv"):
+                if not path.lower().endswith(".csv"):
+                    path += ".csv"
+                self._write_csv(path)
+                QMessageBox.information(self, "Export data", f"CSV saved to:\n{path}")
+            else:
+                if not path.lower().endswith(".xlsx"):
+                    path += ".xlsx"
+                self._export_excel_with_graph(path)
         except Exception as e:
             QMessageBox.critical(self, "Export Error", str(e))
+
+    def _write_csv(self, path: str):
+        import csv
+        headers, rows = self._table_rows()
+        with open(path, "w", newline="", encoding="utf-8") as f:
+            w = csv.writer(f)
+            w.writerow(headers)
+            for row in rows:
+                w.writerow(["" if v is None else v for v in row])
+
+    def _export_excel_with_graph(self, path: str):
+        """Write the data sheet + a fit summary and embed the I-V chart PNG."""
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "Data"
+        headers, rows = self._table_rows()
+        ws.append(headers)
+        for row in rows:
+            ws.append(["" if v is None else v for v in row])
+
+        # Fit summary block below the data
+        s = self._result_summary
+        ws.append([])
+        ws.append(["Fit R (Ohm)", s.get("fit_R")])
+        ws.append(["R^2", s.get("fit_R_squared")])
+        ws.append(["Ohmic status", s.get("ohmic_status")])
+        ws.append(["Temperature (C)", s.get("temperature_C")])
+        ws.append(["4PP correction factor CF", getattr(self, "_iv_cf", None)])
+
+        try:
+            import PIL  # type: ignore  # noqa: F401
+            tmpdir = tempfile.mkdtemp(prefix="iv_graph_")
+            fp = None
+            pix = self.chart.grab()
+            if not pix.isNull():
+                fp = os.path.join(tmpdir, "iv_chart.png")
+                pix.save(fp, "PNG")
+                ws.add_image(XLImage(fp), f"A{len(rows) + 9}")
+            wb.save(path)
+            if fp:
+                try:
+                    os.remove(fp)
+                except OSError:
+                    pass
+            try:
+                os.rmdir(tmpdir)
+            except OSError:
+                pass
+            QMessageBox.information(self, "Export data", f"Excel workbook saved to:\n{path}")
+        except ImportError:
+            wb.save(path)
+            QMessageBox.warning(
+                self, "Export data",
+                "Excel file saved without the embedded graph.\n\n"
+                "To include the graph, install Pillow:\n  pip install pillow",
+            )
 
     def _save_graph(self):
         path, _ = QFileDialog.getSaveFileName(

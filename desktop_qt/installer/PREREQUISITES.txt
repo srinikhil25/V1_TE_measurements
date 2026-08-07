@@ -1,0 +1,42 @@
+TE Measurement — Prerequisites (measurement PC)
+================================================
+
+The application is self-contained (Python and all libraries are bundled).
+It does NOT require Python to be installed.
+
+However, the instrument hardware needs its vendor drivers, which are SYSTEM
+installs and are intentionally NOT bundled in this installer:
+
+1. NI-VISA runtime  (National Instruments)
+   - Required for all GPIB instruments: Keithley 2401, 2182A, 2700, and the
+     Matsusada P4K-80M heater supply.
+   - Without it, the app runs but cannot connect to any GPIB instrument.
+   - Download: search "NI-VISA download" on ni.com (free).
+
+2. GPIB interface driver
+   - The NI GPIB-USB-HS (or equivalent) driver, installed with NI-488.2.
+
+3. Optris IR camera SDK  (only if using the IR thermal camera)
+   The worker looks for, in order:
+     a) OTC SDK 10.x   at  C:\Program Files\Optris\otcsdk
+        (or wherever the OTC_SDK_DIR environment variable points)
+     b) Legacy IrDirectSDK at
+            DLL:    C:\IrDirectSDK\sdk\x64\libirimager.dll
+            config: C:\IrDirectSDK\generic.xml
+   - If neither is present the app still runs; the IR panel simply reports
+     "no camera".
+
+Application data
+----------------
+- The database and logs are created automatically at first run under:
+      %APPDATA%\TEMeasurement\
+        te_measurement.db     (measurements, users)
+        app.log               (diagnostic log)
+- Uninstalling the app does NOT delete this folder, so your data survives
+  upgrades. Delete it manually if you want a clean slate.
+
+Default login accounts (development seed — change before shared deployment)
+--------------------------------------------------------------------------
+  superadmin / superadmin
+  labadmin   / labadmin
+  researcher / researcher

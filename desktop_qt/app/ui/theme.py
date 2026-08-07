@@ -137,6 +137,30 @@ QComboBox QAbstractItemView {{
     selection-color: {TEXT_PRIMARY};
 }}
 
+/* ── Check boxes ─────────────────────────────────────────────────────────── */
+QCheckBox {{
+    color: {TEXT_SECONDARY};
+    spacing: 9px;
+    font-size: 12px;
+}}
+QCheckBox::indicator {{
+    width: 18px;
+    height: 18px;
+    border: 1.5px solid {BORDER_STRONG};
+    border-radius: 5px;
+    background: {ELEVATED_BG};
+}}
+QCheckBox::indicator:hover {{
+    border-color: {PRIMARY};
+}}
+QCheckBox::indicator:checked {{
+    background: {PRIMARY};
+    border-color: {PRIMARY};
+}}
+QCheckBox::indicator:checked:hover {{
+    background: {PRIMARY_HOVER};
+}}
+
 /* ── Buttons ─────────────────────────────────────────────────────────────── */
 QPushButton {{
     border-radius: 6px;

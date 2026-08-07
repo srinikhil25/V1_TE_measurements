@@ -1,0 +1,25 @@
+# PyInstaller / installer build artifacts
+/build/
+/dist/
+/installer/Output/
+/installer/app.ico
+/installer/app.png
+*.pyc
+__pycache__/
+
+# Runtime logs
+log.txt_*.log
+debug.log
+
+# Virtual environment
+/venv/
+
+
+build_deck_latest.py
+build_deck.py
+build_pptx_latest.py
+deck2*
+diag*
+slide_assets/
+docs/
+log*

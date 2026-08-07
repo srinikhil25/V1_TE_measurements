@@ -3,7 +3,7 @@
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QTableWidget, QTableWidgetItem, QHeaderView, QFrame,
-    QPushButton, QFileDialog, QMessageBox,
+    QPushButton, QFileDialog, QMessageBox, QScrollArea,
 )
 from PyQt6.QtCore import Qt
 
@@ -116,7 +116,7 @@ class HistoryPage(QWidget):
             if not m:
                 QMessageBox.warning(self, "History", "Measurement not found in database.")
                 return
-            if m.type != "seebeck":
+            if m.type not in ("seebeck", "iv"):
                 QMessageBox.information(
                     self,
                     "History",
@@ -146,8 +146,12 @@ class HistoryPage(QWidget):
             )
             return
 
+        if m.type == "iv":
+            self._show_iv_detail(m, measurement_id, data, integ)
+            return
+
         # Lazy import to avoid circulars
-        from .seebeck_page import _TABLE_COLS
+        from .seebeck_page import _TABLE_COLS, SeebeckPage
         from ..theme import PRIMARY
         import pyqtgraph as pg
         import os
@@ -157,9 +161,18 @@ class HistoryPage(QWidget):
         import csv
 
         # Build a simple detail window inline to avoid another file.
+        # Scrollable so the three graphs + full data table are all reachable.
         win = QWidget(self, Qt.WindowType.Window)
         win.setWindowTitle(f"Measurement #{measurement_id} — Seebeck (history)")
-        layout = QVBoxLayout(win)
+        _win_v = QVBoxLayout(win)
+        _win_v.setContentsMargins(0, 0, 0, 0)
+        _scroll = QScrollArea()
+        _scroll.setWidgetResizable(True)
+        _scroll.setFrameShape(QFrame.Shape.NoFrame)
+        _win_v.addWidget(_scroll)
+        _content = QWidget()
+        _scroll.setWidget(_content)
+        layout = QVBoxLayout(_content)
         layout.setContentsMargins(20, 20, 20, 20)
         layout.setSpacing(12)
 
@@ -207,49 +220,41 @@ class HistoryPage(QWidget):
         btn_row.addStretch()
         layout.addLayout(btn_row)
 
-        # Data table (read-only)
         headers = [col[1] for col in _TABLE_COLS]
         keys = [col[0] for col in _TABLE_COLS]
-        tbl = QTableWidget(len(data), len(headers))
-        tbl.setHorizontalHeaderLabels(headers)
-        tbl.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
-        tbl.horizontalHeader().setStretchLastSection(True)
-        tbl.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-        for i, row in enumerate(data):
-            for j, (key, _, fmt) in enumerate(_TABLE_COLS):
-                val = row.get(key)
-                text = "—" if val is None else fmt.format(val)
-                item = QTableWidgetItem(text)
-                item.setTextAlignment(
-                    Qt.AlignmentFlag.AlignCenter
-                )
-                tbl.setItem(i, j, item)
-        layout.addWidget(tbl)
 
-        # Helper: rebuild charts off-screen for export
+        # Build the three charts (defined before display so we can show the
+        # graphs first, then the numbers — like the I-V detail view).
         def _build_charts():
             charts = {}
 
-            # Live chart: TEMF + T1/T2 vs time
+            # Live chart: Temperature (left) + TEMF (right) vs time — matches G1.
             live = pg.PlotWidget()
             live.setBackground("white")
             live.showGrid(x=True, y=True, alpha=0.25)
-            live.setLabel("left", "TEMF (mV)")
+            live.setLabel("left", "Temperature (°C)")
             live.setLabel("bottom", "Time (s)")
             pi = live.getPlotItem()
+            pi.getAxis("left").setStyle(tickTextOffset=6)
             pi.showAxis("right")
-            pi.setLabel("right", "Temperature (°C)")
-            pi.getAxis("right").setStyle(tickFont=pg.QtGui.QFont("Segoe UI", 9))
-            vb_temp = pg.ViewBox()
-            pi.scene().addItem(vb_temp)
-            pi.getAxis("right").linkToView(vb_temp)
-            vb_temp.setXLink(pi)
+            pi.setLabel("right", "TEMF (mV)")
+            pi.getAxis("right").setStyle(tickFont=pg.QtGui.QFont("Segoe UI", 9), tickTextOffset=6)
+            vb_temf = pg.ViewBox()
+            pi.scene().addItem(vb_temf)
+            pi.getAxis("right").linkToView(vb_temf)
+            vb_temf.setXLink(pi)
 
-            curve_temf = pi.plot(pen=pg.mkPen("#7C3AED", width=2))
-            curve_t1 = pg.PlotCurveItem(pen=pg.mkPen("#2563EB", width=2))
-            curve_t2 = pg.PlotCurveItem(pen=pg.mkPen("#DC2626", width=2))
-            vb_temp.addItem(curve_t1)
-            vb_temp.addItem(curve_t2)
+            def _sync_live():
+                vb_temf.setGeometry(pi.vb.sceneBoundingRect())
+                vb_temf.linkedViewChanged(pi.vb, vb_temf.XAxis)
+            pi.vb.sigResized.connect(_sync_live)
+            _sync_live()
+
+            # T₁ red, T₂ blue on the left (Temperature); TEMF green on the right.
+            curve_t1 = pi.plot(pen=pg.mkPen("#DC2626", width=2))
+            curve_t2 = pi.plot(pen=pg.mkPen("#2563EB", width=2))
+            curve_temf = pg.PlotCurveItem(pen=pg.mkPen("#2CA02C", width=2))
+            vb_temf.addItem(curve_temf)
 
             times = [r.get("Time [s]", 0) for r in data]
             temf = [r.get("TEMF [mV]") for r in data]
@@ -271,20 +276,26 @@ class HistoryPage(QWidget):
             temf_dt.showGrid(x=True, y=True, alpha=0.25)
             temf_dt.setLabel("left", "TEMF (mV)")
             temf_dt.setLabel("bottom", "ΔT (°C)")
-            heat_x, heat_y, cool_x, cool_y = [], [], [], []
-            for r in data:
-                dt = r.get("Delta Temp [oC]")
-                tf = r.get("TEMF [mV]")
-                if dt is None or tf is None:
-                    continue
-                if r.get("branch") == "cooling":
-                    cool_x.append(dt)
-                    cool_y.append(tf)
-                else:
-                    heat_x.append(dt)
-                    heat_y.append(tf)
-            temf_dt.plot(heat_x, heat_y, pen=pg.mkPen("#ED6C02", width=2))
-            temf_dt.plot(cool_x, cool_y, pen=pg.mkPen("#2563EB", width=2))
+            heating = [r for r in data if r.get("branch") != "cooling"]
+            cooling = [r for r in data if r.get("branch") == "cooling"]
+            # Bridge cooling to the heating peak so it continues from the peak.
+            if heating and cooling:
+                cooling = [heating[-1]] + cooling
+
+            def _dt_tf(rows):
+                xs, ys = [], []
+                for r in rows:
+                    dt = r.get("Delta Temp [oC]")
+                    tf = r.get("TEMF [mV]")
+                    if dt is not None and tf is not None:
+                        xs.append(dt)
+                        ys.append(tf)
+                return xs, ys
+
+            hx, hy = _dt_tf(heating)
+            cx, cy = _dt_tf(cooling)
+            temf_dt.plot(hx, hy, pen=pg.mkPen("#ED6C02", width=2))
+            temf_dt.plot(cx, cy, pen=pg.mkPen("#2563EB", width=2))
             charts["temf_dt"] = temf_dt
 
             # S vs T0
@@ -306,6 +317,36 @@ class HistoryPage(QWidget):
 
             return charts
 
+        # Graphs first, then the numbers (mirrors the I-V detail layout).
+        charts = _build_charts()
+        _legends = {
+            "live": [("#2CA02C", "TEMF [mV]"), ("#DC2626", "T₁ [°C]"), ("#2563EB", "T₂ [°C]")],
+            "temf_dt": [("#ED6C02", "Heating"), ("#2563EB", "Cooling")],
+        }
+        for _k in ("live", "temf_dt", "s_t0"):
+            _c = charts.get(_k)
+            if _c is None:
+                continue
+            if _k in _legends:
+                layout.addWidget(SeebeckPage._legend_strip(_legends[_k]))
+            _c.setMinimumHeight(220)
+            layout.addWidget(_c)
+
+        tbl = QTableWidget(len(data), len(headers))
+        tbl.setHorizontalHeaderLabels(headers)
+        tbl.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
+        tbl.horizontalHeader().setStretchLastSection(True)
+        tbl.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        tbl.setMinimumHeight(260)
+        for i, row in enumerate(data):
+            for j, (key, _, fmt) in enumerate(_TABLE_COLS):
+                val = row.get(key)
+                text = "—" if val is None else fmt.format(val)
+                item = QTableWidgetItem(text)
+                item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                tbl.setItem(i, j, item)
+        layout.addWidget(tbl)
+
         def _save_graphs():
             base, _ = QFileDialog.getSaveFileName(
                 win,
@@ -316,7 +357,6 @@ class HistoryPage(QWidget):
             if not base:
                 return
             root, _ext = os.path.splitext(base)
-            charts = _build_charts()
             paths = []
             for key, suffix in [
                 ("live", "live"),
@@ -377,7 +417,6 @@ class HistoryPage(QWidget):
                     tmpdir = tempfile.mkdtemp(prefix="seebeck_hist_graphs_")
                     files: list[str] = []
 
-                    charts = _build_charts()
                     for key, name, row_offset in [
                         ("live", "chart_live.png", 0),
                         ("temf_dt", "chart_temf_dt.png", 20),
@@ -421,5 +460,222 @@ class HistoryPage(QWidget):
         btn_graphs.clicked.connect(_save_graphs)
         btn_data.clicked.connect(_save_data)
 
-        win.resize(900, 600)
+        win.resize(980, 860)
+        win.show()
+
+    # ------------------------------------------------------------------
+    # I-V detail view
+    # ------------------------------------------------------------------
+
+    def _show_iv_detail(self, m, measurement_id, data, integ):
+        """Detail window for a stored I-V sweep: table + I-V chart + fit + export."""
+        from ..theme import PRIMARY, WARNING
+        from ...services.measurement_service import _linear_fit_resistance, _ohmic_status
+        import pyqtgraph as pg
+        import os
+        import tempfile
+        import csv
+        import json
+        import hashlib
+        from openpyxl import Workbook
+        from openpyxl.drawing.image import Image as XLImage
+
+        # The fit isn't persisted — recompute it from the stored points.
+        fit_R, fit_R2 = _linear_fit_resistance(data)
+        ohmic = _ohmic_status(fit_R2)
+
+        # Bidirectional split (forward vs reverse) from the saved run params.
+        try:
+            params = json.loads(m.params_json) if getattr(m, "params_json", None) else {}
+        except Exception:
+            params = {}
+        n_fwd = int(params.get("points") or 0)
+        bidir = bool(params.get("bidirectional"))
+
+        headers = ["Current (A)", "Voltage (V)", "Resistance (Ω)", "Power (mW)",
+                   "Resistivity (Ω·cm)", "Conductivity (S/cm)"]
+
+        def _rows():
+            out = []
+            for r in data:
+                cur, vol, res = r.get("current"), r.get("voltage"), r.get("resistance")
+                pw = (cur * vol * 1000) if (cur is not None and vol is not None) else None
+                out.append([cur, vol, res, pw, r.get("resistivity"), r.get("conductivity")])
+            return out
+
+        def _build_chart():
+            chart = pg.PlotWidget()
+            chart.setBackground("white")
+            chart.showGrid(x=True, y=True, alpha=0.25)
+            chart.getAxis("left").enableAutoSIPrefix(False)
+            chart.getAxis("bottom").enableAutoSIPrefix(False)
+            chart.setLabel("left", "Current (A)")
+            chart.setLabel("bottom", "Voltage (V)")
+            chart.setTitle("I-V Characteristic")
+            pts = [(r.get("voltage"), r.get("current")) for r in data
+                   if r.get("voltage") is not None and r.get("current") is not None]
+            # Forward (teal) and reverse (orange), matching the live I-V page.
+            if bidir and n_fwd and len(pts) > n_fwd:
+                fwd, rev = pts[:n_fwd], pts[n_fwd:]
+            else:
+                fwd, rev = pts, []
+            sc_f = pg.ScatterPlotItem(size=6, pen=pg.mkPen(None), brush=pg.mkBrush(PRIMARY + "CC"))
+            sc_f.setData([p[0] for p in fwd], [p[1] for p in fwd])
+            chart.addItem(sc_f)
+            if rev:
+                sc_r = pg.ScatterPlotItem(size=6, pen=pg.mkPen(None), brush=pg.mkBrush(WARNING + "CC"))
+                sc_r.setData([p[0] for p in rev], [p[1] for p in rev])
+                chart.addItem(sc_r)
+            ys = [p[1] for p in pts]
+            if fit_R is not None and abs(fit_R) > 1e-12 and ys:
+                i_lo, i_hi = min(ys), max(ys)
+                chart.plot([fit_R * i_lo, fit_R * i_hi], [i_lo, i_hi],
+                           pen=pg.mkPen("#4D7C5F", width=2))
+            return chart
+
+        win = QWidget(self, Qt.WindowType.Window)
+        win.setWindowTitle(f"Measurement #{measurement_id} — I-V (history)")
+        layout = QVBoxLayout(win)
+        layout.setContentsMargins(20, 20, 20, 20)
+        layout.setSpacing(12)
+
+        # Header + integrity
+        hdr = QHBoxLayout()
+        title = QLabel(
+            f"I-V Measurement #{measurement_id}  ·  Sample: {m.sample_id or '—'}  ·  Operator: {m.operator or '—'}"
+        )
+        title.setStyleSheet(f"color: {TEXT_PRIMARY}; font-size: 14px; font-weight: 600;")
+        hdr.addWidget(title)
+        hdr.addStretch()
+        if integ is not None:
+            canonical = json.dumps(data, sort_keys=True, separators=(",", ":"))
+            digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+            ok = digest == integ.data_hash
+            lbl_int = QLabel("Integrity: OK" if ok else "Integrity: MISMATCH")
+            lbl_int.setStyleSheet(
+                "color: %s; font-size: 11px; font-weight: 600;"
+                % ("#4D7C5F" if ok else "#DC2626")
+            )
+            hdr.addWidget(lbl_int)
+        layout.addLayout(hdr)
+
+        # Fit summary
+        parts = []
+        if fit_R is not None:
+            parts.append(f"R = {fit_R:.6g} Ω")
+        if fit_R2 is not None:
+            parts.append(f"R² = {fit_R2:.4f}")
+        parts.append(f"status = {ohmic}")
+        summ = QLabel("    ·    ".join(parts))
+        summ.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 12px;")
+        layout.addWidget(summ)
+
+        # Export buttons
+        btn_row = QHBoxLayout()
+        btn_graph = QPushButton("Save graph…")
+        btn_data = QPushButton("Save data…")
+        for b in (btn_graph, btn_data):
+            b.setFixedHeight(26)
+            b.setStyleSheet(
+                "QPushButton { background: white; border: 1px solid #C7C0B0; "
+                "border-radius: 4px; padding: 2px 10px; font-size: 11px; }"
+                "QPushButton:hover { background: #FBFAF5; }"
+            )
+        btn_row.addWidget(btn_graph)
+        btn_row.addWidget(btn_data)
+        btn_row.addStretch()
+        layout.addLayout(btn_row)
+
+        # Chart
+        chart = _build_chart()
+        chart.setMinimumHeight(280)
+        layout.addWidget(chart)
+
+        # Data table
+        tbl = QTableWidget(len(data), len(headers))
+        tbl.setHorizontalHeaderLabels(headers)
+        tbl.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        tbl.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        for i, row in enumerate(_rows()):
+            for j, val in enumerate(row):
+                text = "—" if val is None else f"{val:.6g}"
+                it = QTableWidgetItem(text)
+                it.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                tbl.setItem(i, j, it)
+        layout.addWidget(tbl)
+
+        def _save_graph():
+            path, _ = QFileDialog.getSaveFileName(
+                win, "Save graph", f"iv_{measurement_id}.png", "PNG (*.png)"
+            )
+            if not path:
+                return
+            pix = _build_chart().grab()
+            if pix.isNull():
+                QMessageBox.warning(win, "Save graph", "Chart image is empty.")
+                return
+            pix.save(path, "PNG")
+            QMessageBox.information(win, "Save graph", f"Saved to:\n{path}")
+
+        def _save_data():
+            path, selected = QFileDialog.getSaveFileName(
+                win, "Save data", f"iv_{measurement_id}_data.xlsx",
+                "Excel workbook (*.xlsx);;CSV file (*.csv)",
+            )
+            if not path:
+                return
+            if selected.startswith("CSV") or path.lower().endswith(".csv"):
+                if not path.lower().endswith(".csv"):
+                    path += ".csv"
+                with open(path, "w", newline="", encoding="utf-8") as f:
+                    w = csv.writer(f)
+                    w.writerow(headers)
+                    for row in _rows():
+                        w.writerow(["" if v is None else v for v in row])
+                QMessageBox.information(win, "Save data", f"CSV saved to:\n{path}")
+                return
+            if not path.lower().endswith(".xlsx"):
+                path += ".xlsx"
+            wb = Workbook()
+            ws = wb.active
+            ws.title = "Data"
+            ws.append(headers)
+            for row in _rows():
+                ws.append(["" if v is None else v for v in row])
+            ws.append([])
+            ws.append(["Fit R (Ohm)", fit_R])
+            ws.append(["R^2", fit_R2])
+            ws.append(["Ohmic status", ohmic])
+            try:
+                import PIL  # type: ignore  # noqa: F401
+                tmpdir = tempfile.mkdtemp(prefix="iv_hist_")
+                fp = None
+                pix = _build_chart().grab()
+                if not pix.isNull():
+                    fp = os.path.join(tmpdir, "iv_chart.png")
+                    pix.save(fp, "PNG")
+                    ws.add_image(XLImage(fp), f"A{len(data) + 8}")
+                wb.save(path)
+                if fp:
+                    try:
+                        os.remove(fp)
+                    except OSError:
+                        pass
+                try:
+                    os.rmdir(tmpdir)
+                except OSError:
+                    pass
+                QMessageBox.information(win, "Save data", f"Excel workbook saved to:\n{path}")
+            except ImportError:
+                wb.save(path)
+                QMessageBox.warning(
+                    win, "Save data",
+                    "Excel file saved without the embedded graph.\n\n"
+                    "To include the graph, install Pillow:\n  pip install pillow",
+                )
+
+        btn_graph.clicked.connect(_save_graph)
+        btn_data.clicked.connect(_save_data)
+
+        win.resize(900, 640)
         win.show()

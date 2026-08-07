@@ -81,4 +81,11 @@ def main() -> None:
 
 
 if __name__ == "__main__":
+    # MUST be the first call. When frozen (PyInstaller), the IR-camera worker is
+    # started with multiprocessing 'spawn', which relaunches this same .exe. Without
+    # freeze_support() every spawned worker would fall through and open a new GUI
+    # window (fork-bomb). freeze_support() intercepts the child bootstrap, runs the
+    # worker target, and exits — a no-op in the normal (unfrozen) interpreter.
+    import multiprocessing
+    multiprocessing.freeze_support()
     main()

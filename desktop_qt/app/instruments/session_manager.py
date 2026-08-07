@@ -332,6 +332,7 @@ class MeasurementSessionManager:
                 delta_t_over_t0 = (abs(delta_t) / t0_k) if t0_k > 0 else None
                 branch = "cooling" if phase in ("ramp_down", "cooling_tail") else "heating"
                 heater_v = result.get("HeaterV_V")
+                heater_i = result.get("HeaterI_A")
                 row = {
                     "Time [s]": elapsed_time,
                     "TEMF [mV]": temf_mv,
@@ -343,6 +344,7 @@ class MeasurementSessionManager:
                     "delta_T_over_T0": round(delta_t_over_t0, 6) if delta_t_over_t0 is not None else None,
                     "S [µV/K]": s_uv_per_k,
                     "Heater V [V]": round(heater_v, 4) if heater_v is not None else None,
+                    "Heater I [A]": round(heater_i, 4) if heater_i is not None else None,
                     "branch": branch,
                 }
                 with self.lock:

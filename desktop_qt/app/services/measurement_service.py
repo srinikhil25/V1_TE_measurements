@@ -113,8 +113,14 @@ class SeebeckService:
 
 def _linear_fit_resistance(points: List[Dict]) -> tuple:
     """
-    Fit V = R*I (through origin). Returns (R, R_squared).
-    points: list of dicts with "current" and "voltage" keys.
+    Fit V = R*I + V0 (slope + intercept). Returns (R, R_squared).
+
+    The slope R is the resistance; the intercept V0 absorbs the thermoelectric
+    offset voltage (tens of µV from dissimilar-metal/temperature junctions),
+    which on a sub-mV signal would otherwise masquerade as non-ohmic behaviour
+    when forcing the fit through the origin. A genuinely curved (non-ohmic) I-V
+    still drops R_squared, so this only removes the offset confound — it does not
+    hide real non-linearity.
     """
     import numpy as np
     valid = [
@@ -127,16 +133,17 @@ def _linear_fit_resistance(points: List[Dict]) -> tuple:
         return None, None
     I = np.array([x[0] for x in valid])
     V = np.array([x[1] for x in valid])
-    # V = R*I  =>  R = sum(I*V) / sum(I^2)
-    II = I * I
-    IV = I * V
-    R = float(np.sum(IV) / np.sum(II)) if np.sum(II) > 0 else None
-    if R is None:
+    # Least-squares V = R*I + V0.
+    A = np.vstack([I, np.ones_like(I)]).T
+    try:
+        (R, V0), *_ = np.linalg.lstsq(A, V, rcond=None)
+    except Exception:
         return None, None
-    V_fit = R * I
-    ss_res = np.sum((V - V_fit) ** 2)
-    ss_tot = np.sum((V - np.mean(V)) ** 2)
-    R_squared = float(1 - ss_res / ss_tot) if ss_tot > 0 else None
+    R = float(R)
+    V_fit = R * I + V0
+    ss_res = float(np.sum((V - V_fit) ** 2))
+    ss_tot = float(np.sum((V - V.mean()) ** 2))
+    R_squared = (1.0 - ss_res / ss_tot) if ss_tot > 0 else None
     return R, R_squared
 
 
@@ -156,7 +163,7 @@ def _ohmic_status(R_squared: Optional[float]) -> str:
 
 def run_iv_sweep(
     # Sweep definition
-    source_mode: str = "current",  # "current" = 4-probe (6221 + 2182A), "voltage" = 2-probe
+    source_mode: str = "current",  # "current" = source I/measure V, "voltage" = source V/measure I
     start: float = -0.01,
     stop: float = 0.01,
     points: int = 21,
@@ -165,10 +172,13 @@ def run_iv_sweep(
     current_limit: float = 0.1,
     voltage_limit: float = 21.0,
     nplc: float = 5.0,
-    # Dimensions (m) for resistivity
+    four_wire: bool = False,        # True = 4-wire remote sense (needs sense leads)
+    # Dimensions (cm) for resistivity, and sample geometry
     length: Optional[float] = None,
     width: Optional[float] = None,
     thickness: Optional[float] = None,
+    geometry: str = "bar",          # "bar", "vdp", or "4pp" (in-line 4-point probe)
+    spacing: Optional[float] = None,  # 4pp probe spacing (cm)
     # DB and metadata
     sample_id: Optional[str] = None,
     operator: Optional[str] = None,
@@ -182,8 +192,10 @@ def run_iv_sweep(
     """
     Run IV sweep and return full result dict.
 
-    - source_mode "current": 4-probe (6221 current source, 2182A voltmeter).
-    - source_mode "voltage": 2-probe (6221 voltage source, read I from 6221).
+    Uses the Keithley 2401 SourceMeter (sources and measures in one box):
+    - source_mode "current": 2401 sources current, measures voltage.
+    - source_mode "voltage": 2401 sources voltage, measures current.
+    four_wire selects 4-wire remote sense (true 4-probe) vs 2-wire.
 
     Returns:
         {
@@ -254,6 +266,9 @@ def run_iv_sweep(
                         "current_limit": current_limit,
                         "voltage_limit": voltage_limit,
                         "nplc": nplc,
+                        "four_wire": four_wire,
+                        "geometry": geometry,
+                        "spacing": spacing,
                         "length": length,
                         "width": width,
                         "thickness": thickness,
@@ -271,57 +286,50 @@ def run_iv_sweep(
                     db.close()
                 db = None
 
-        if source_mode == "current":
-            # 4-probe: 6221 sources current, 2182A measures voltage
-            system.prepare_iv_4probe(
-                voltage_limit=voltage_limit,
-                current_limit=current_limit,
-                nplc=nplc,
-            )
-            delay_s = delay_ms / 1000.0
-            for idx, current_A in enumerate(sequence):
-                if abort_check and abort_check():
-                    break
-                pt = system.measure_iv_point_4probe(current_A, delay_s)
-                if pt is None:
-                    pt = {"current": current_A, "voltage": None, "resistance": None}
-                _enrich_point(pt, length, width, thickness)
-                results.append(pt)
-                if progress_callback:
-                    progress_callback(idx, pt)
-        else:
-            # 2-probe: 6221 voltage source, read I from 6221
-            vmax = max(abs(start), abs(stop), abs(voltage_limit))
-            system.k6221.configure_voltage_source(
-                voltage_limit=vmax, current_limit=current_limit
-            )
-            system.k6221.output_on()
-            delay_s = delay_ms / 1000.0
-            for idx, voltage_V in enumerate(sequence):
-                if abort_check and abort_check():
-                    break
-                system.k6221.set_voltage(voltage_V)
-                time.sleep(delay_s)
-                meas = system.k6221.read_measurement()
-                if meas is None:
-                    pt = {"voltage": voltage_V, "current": None, "resistance": None}
-                else:
-                    i = meas.get("current")
-                    v = meas.get("voltage", voltage_V)
-                    r = v / i if i and abs(i) > 1e-12 else None
-                    pt = {"voltage": v, "current": i, "resistance": r}
-                _enrich_point(pt, length, width, thickness)
-                results.append(pt)
-                if progress_callback:
-                    progress_callback(idx, pt)
-            system.k6221.output_off()
+        # Single SourceMeter (2401) handles both source modes. Compliance is the
+        # limit on the MEASURED quantity: volts when sourcing current, amps when
+        # sourcing voltage.
+        is_current = source_mode == "current"
+        compliance = voltage_limit if is_current else current_limit
+        system.k2401.configure(
+            source_mode=source_mode,
+            compliance=compliance,
+            nplc=nplc,
+            four_wire=four_wire,
+        )
+        system.k2401.output_on()
+        delay_s = delay_ms / 1000.0
+        # Finite-sheet geometric correction for the in-line 4-point probe
+        # (computed once; depends only on geometry, not on the data points).
+        size_factor = 1.0
+        if geometry == "4pp":
+            size_factor = collinear_4pp_size_factor(spacing, length, width)
+        for idx, level in enumerate(sequence):
+            if abort_check and abort_check():
+                break
+            system.k2401.set_level(level)
+            time.sleep(delay_s)
+            meas = system.k2401.read_point()
+            if meas is None:
+                pt = {"voltage": None, "current": None, "resistance": None}
+                pt["current" if is_current else "voltage"] = level
+            else:
+                v = meas["voltage"]
+                i = meas["current"]
+                r = (v / i) if (i and abs(i) > 1e-12) else None
+                pt = {"voltage": v, "current": i, "resistance": r}
+            _enrich_point(pt, length, width, thickness, geometry, spacing, size_factor)
+            results.append(pt)
+            if progress_callback:
+                progress_callback(idx, pt)
+        system.k2401.output_off()
 
         system.disconnect_all()
     except Exception as exc:
         logger.error("IV sweep error: %s", exc)
-        if system.k6221.connected:
+        if system.k2401.connected:
             try:
-                system.k6221.output_off()
+                system.k2401.output_off()
             except Exception:
                 pass
         system.disconnect_all()
@@ -384,23 +392,92 @@ def run_iv_sweep(
     }
 
 
+def collinear_4pp_size_factor(s, length, width, n_terms: int = 60) -> float:
+    """Finite-sample geometric correction for a collinear 4-point probe centered
+    on a rectangular thin sheet.
+
+    s        : probe spacing (cm)
+    length   : sample dimension ALONG the probe line (cm)
+    width    : sample dimension ACROSS the probe line (cm)
+    Returns C such that  ρ_true = ρ_infinite · C   (C → 1 for a large sheet,
+    C < 1 when the probes are near the edges). Uses the method of images
+    (Neumann/insulating edges). Returns 1.0 if not computable.
+    """
+    import math
+    if not (s and length and width) or s <= 0 or length <= 0 or width <= 0:
+        return 1.0
+    if length <= 3.0 * s:          # the 4-probe array (span 3·s) doesn't fit
+        return 1.0
+    xs = [-1.5 * s, -0.5 * s, 0.5 * s, 1.5 * s]   # probe x-positions, y = 0
+    L, W, N = length, width, int(n_terms)
+
+    def pot(px, sx, sign):
+        # Sum −ln(distance) over the image lattice (truncated to ±N).
+        tot = 0.0
+        for m in range(-N, N + 1):
+            for x_img in (sx + 2 * m * L, -sx + (2 * m + 1) * L):
+                dx2 = (px - x_img) ** 2
+                for k in range(-N, N + 1):
+                    y_img = k * W
+                    d2 = dx2 + y_img * y_img
+                    if d2 > 1e-30:
+                        tot += -0.5 * math.log(d2)
+        return sign * tot
+
+    # Current +I at outer probe 1, −I at outer probe 4; sense at inner 2 & 3.
+    v2 = pot(xs[1], xs[0], 1.0) + pot(xs[1], xs[3], -1.0)
+    v3 = pot(xs[2], xs[0], 1.0) + pot(xs[2], xs[3], -1.0)
+    g = (v2 - v3) / (2.0 * math.pi)
+    g_inf = math.log(2) / math.pi
+    if g <= 0:
+        return 1.0
+    return g_inf / g
+
+
 def _enrich_point(
     pt: Dict,
     length: Optional[float],
     width: Optional[float],
     thickness: Optional[float],
+    geometry: str = "bar",
+    spacing: Optional[float] = None,
+    size_factor: float = 1.0,
 ) -> None:
-    """Add resistivity and conductivity to point if dimensions given."""
+    """Add resistivity (Ω·cm) and conductivity (S/cm). Dimensions are in cm.
+
+    geometry "bar": rectangular bar — uniform unidirectional current,
+                    ρ = R·(W·t)/L  (needs length, width, thickness).
+    geometry "vdp": van der Pauw — arbitrary flat shape of uniform thickness,
+                    ρ = (π·t / ln 2)·R  (needs thickness only).
+    geometry "4pp": in-line 4-point probe (collinear) — radial current.
+                    ρ = (π/ln 2)·t·R · F_t · size_factor, where F_t is a smooth
+                    thickness factor (bridges thin↔bulk via t/s) and size_factor
+                    is the finite-sheet geometric correction (collinear_4pp_size_factor).
+    """
+    import math
     r = pt.get("resistance")
-    if r is None or not (length and width and thickness):
-        pt.setdefault("resistivity", None)
-        pt.setdefault("conductivity", None)
+    pt.setdefault("resistivity", None)
+    pt.setdefault("conductivity", None)
+    if r is None or r <= 0:
         return
-    area = width * thickness
-    if area > 0 and length > 0:
-        rho = r * area / length
-        pt["resistivity"] = rho
-        pt["conductivity"] = 1.0 / rho if rho else None
-    else:
-        pt["resistivity"] = None
-        pt["conductivity"] = None
+    rho = None
+    if geometry == "vdp":
+        if thickness and thickness > 0:
+            rho = (math.pi * thickness / math.log(2)) * r
+    elif geometry == "4pp":
+        if thickness and thickness > 0:
+            base = (math.pi / math.log(2)) * thickness * r       # thin, infinite sheet
+            f_t = 1.0
+            if spacing and spacing > 0:                          # smooth thickness factor
+                ts = thickness / spacing
+                denom = math.log(math.sinh(ts) / math.sinh(ts / 2.0))
+                if denom > 0:
+                    f_t = math.log(2) / denom                    # →1 thin, →bulk for large t/s
+            rho = base * f_t * (size_factor or 1.0)              # × finite-sheet correction
+    else:  # rectangular bar
+        if length and width and thickness and length > 0:
+            area = width * thickness
+            if area > 0:
+                rho = r * area / length
+    pt["resistivity"] = rho
+    pt["conductivity"] = (1.0 / rho) if rho else None

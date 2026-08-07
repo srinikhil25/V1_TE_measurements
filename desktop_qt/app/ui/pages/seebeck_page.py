@@ -70,6 +70,8 @@ _TABLE_COLS: List[tuple] = [
     ("T0 [oC]",         "T₀ [°C]",   "{:.2f}"),
     ("T0 [K]",          "T₀ [K]",    "{:.2f}"),
     ("S [µV/K]",        "S [µV/K]",  "{:.2f}"),
+    ("Heater V [V]",    "Heater [V]", "{:.2f}"),
+    ("Heater I [A]",    "Heater [A]", "{:.3f}"),
 ]
 
 
@@ -324,15 +326,14 @@ class SeebeckPage(QWidget):
         self.chart_temf_dt = pg.PlotWidget()
         self._style_chart(self.chart_temf_dt, "TEMF (mV)", "ΔT (°C)")
         self.chart_temf_dt.setMenuEnabled(False)
-        self.chart_temf_dt.addLegend(offset=(10, 10))
-        self.curve_heat = self.chart_temf_dt.plot(
-            pen=pg.mkPen("#ED6C02", width=2), name="Heating"
-        )
-        self.curve_cool = self.chart_temf_dt.plot(
-            pen=pg.mkPen("#2563EB", width=2), name="Cooling"
-        )
+        self.curve_heat = self.chart_temf_dt.plot(pen=pg.mkPen("#ED6C02", width=2))
+        self.curve_cool = self.chart_temf_dt.plot(pen=pg.mkPen("#2563EB", width=2))
+        legend = self._legend_strip([
+            ("#ED6C02", "Heating"),
+            ("#2563EB", "Cooling"),
+        ])
         tile.body_layout.setContentsMargins(8, 8, 10, 8)
-        tile.body_layout.addWidget(self.chart_temf_dt)
+        tile.body_layout.addWidget(self._wrap_with_legend(legend, self.chart_temf_dt))
         return tile
 
     def _make_s_t0_tile(self) -> Tile:
@@ -454,44 +455,49 @@ class SeebeckPage(QWidget):
 
     def _build_live_chart(self) -> pg.PlotWidget:
         chart = pg.PlotWidget()
-        self._style_chart(chart, "TEMF (mV)", "Time (s)")
+        # Swapped per request: Temperature on the LEFT axis, TEMF on the RIGHT.
+        self._style_chart(chart, "Temperature (°C)", "Time (s)")
         chart.setMenuEnabled(False)
 
         pi = chart.getPlotItem()
+        pi.setContentsMargins(10, 10, 10, 10)          # breathing room around the plot
         pi.showAxis("right")
-        pi.setLabel("right", "Temperature (°C)")
-        pi.getAxis("right").setStyle(tickFont=pg.QtGui.QFont("Segoe UI", 9))
+        pi.setLabel("right", "TEMF (mV)")
+        pi.getAxis("right").setStyle(tickFont=pg.QtGui.QFont("Segoe UI", 9), tickTextOffset=6)
+        pi.getAxis("left").setStyle(tickTextOffset=6)
 
-        self._vb_temp = pg.ViewBox()
-        pi.scene().addItem(self._vb_temp)
-        pi.getAxis("right").linkToView(self._vb_temp)
-        self._vb_temp.setXLink(pi)
+        # Secondary view box carries TEMF against the right axis.
+        self._vb_temf = pg.ViewBox()
+        pi.scene().addItem(self._vb_temf)
+        pi.getAxis("right").linkToView(self._vb_temf)
+        self._vb_temf.setXLink(pi)
 
-        self.curve_temf = pi.plot(pen=pg.mkPen("#7C3AED", width=2))
-        self.curve_t1 = pg.PlotCurveItem(pen=pg.mkPen("#2563EB", width=2))
-        self.curve_t2 = pg.PlotCurveItem(pen=pg.mkPen("#DC2626", width=2))
-        self._vb_temp.addItem(self.curve_t1)
-        self._vb_temp.addItem(self.curve_t2)
-
-        legend = pg.LegendItem(offset=(10, 10))
-        legend.setParentItem(pi.graphicsItem())
-        legend.addItem(self.curve_temf, "TEMF [mV]")
-        legend.addItem(self.curve_t1, "T₁ [°C]")
-        legend.addItem(self.curve_t2, "T₂ [°C]")
+        # Colours: TEMF green, T₁ red, T₂ blue.
+        self.curve_t1 = pi.plot(pen=pg.mkPen("#DC2626", width=2))    # T₁ red (left axis)
+        self.curve_t2 = pi.plot(pen=pg.mkPen("#2563EB", width=2))    # T₂ blue (left axis)
+        self.curve_temf = pg.PlotCurveItem(pen=pg.mkPen("#2CA02C", width=2))  # TEMF green (right)
+        self._vb_temf.addItem(self.curve_temf)
 
         def _sync_views():
-            self._vb_temp.setGeometry(pi.vb.sceneBoundingRect())
-            self._vb_temp.linkedViewChanged(pi.vb, self._vb_temp.XAxis)
+            self._vb_temf.setGeometry(pi.vb.sceneBoundingRect())
+            self._vb_temf.linkedViewChanged(pi.vb, self._vb_temf.XAxis)
 
         pi.vb.sigResized.connect(_sync_views)
         _sync_views()
 
         chart.setXRange(0, 60, padding=0)
-        chart.setYRange(-5, 5, padding=0.05)
-        self._vb_temp.setYRange(0, 100, padding=0.05)
+        chart.setYRange(0, 100, padding=0.05)          # left = Temperature
+        self._vb_temf.setYRange(-5, 5, padding=0.05)   # right = TEMF
 
         self.chart_live = chart
-        return chart
+
+        # Legend as a strip ABOVE the plot, off the data area (no overlap).
+        legend_row = self._legend_strip([
+            ("#2CA02C", "TEMF [mV]"),
+            ("#DC2626", "T₁ [°C]"),
+            ("#2563EB", "T₂ [°C]"),
+        ])
+        return self._wrap_with_legend(legend_row, chart)
 
     @staticmethod
     def _style_chart(chart: pg.PlotWidget, ylabel: str, xlabel: str):
@@ -501,6 +507,39 @@ class SeebeckPage(QWidget):
         chart.setLabel("bottom", xlabel)
         chart.getAxis("left").setStyle(tickFont=pg.QtGui.QFont("Segoe UI", 9))
         chart.getAxis("bottom").setStyle(tickFont=pg.QtGui.QFont("Segoe UI", 9))
+
+    @staticmethod
+    def _legend_strip(items) -> QWidget:
+        """Horizontal legend ABOVE a chart, off the plot area. items: (color, text)."""
+        row = QWidget()
+        lr = QHBoxLayout(row)
+        lr.setContentsMargins(10, 2, 10, 4)
+        lr.setSpacing(22)
+        for color, text in items:
+            w = QWidget()
+            h = QHBoxLayout(w)
+            h.setContentsMargins(0, 0, 0, 0)
+            h.setSpacing(6)
+            sw = QFrame()
+            sw.setFixedSize(18, 4)
+            sw.setStyleSheet(f"background:{color}; border:none; border-radius:2px;")
+            lb = QLabel(text)
+            lb.setStyleSheet(f"color:{TEXT_SECONDARY}; font-size:12px; border:none;")
+            h.addWidget(sw)
+            h.addWidget(lb)
+            lr.addWidget(w)
+        lr.addStretch()
+        return row
+
+    @staticmethod
+    def _wrap_with_legend(legend: QWidget, chart: QWidget) -> QWidget:
+        container = QWidget()
+        cv = QVBoxLayout(container)
+        cv.setContentsMargins(0, 0, 0, 0)
+        cv.setSpacing(2)
+        cv.addWidget(legend)
+        cv.addWidget(chart, stretch=1)
+        return container
 
     # ==================================================================
     # Enlarge / restore
@@ -717,7 +756,7 @@ class SeebeckPage(QWidget):
             curve.setData([], [])
         self.tbl_data.setRowCount(0)
         self.chart_live.enableAutoRange()
-        self._vb_temp.enableAutoRange()
+        self._vb_temf.enableAutoRange()
         self.chart_temf_dt.enableAutoRange()
         self.chart_s_t0.enableAutoRange()
 
@@ -839,6 +878,11 @@ class SeebeckPage(QWidget):
 
         heating = [r for r in self._data if r.get("branch") != "cooling"]
         cooling = [r for r in self._data if r.get("branch") == "cooling"]
+        # Make cooling continue from the heating peak: prepend the last heating
+        # point so the cooling line starts where heating ended (at max ΔT) and
+        # traces back down, instead of detaching and starting from the left.
+        if heating and cooling:
+            cooling = [heating[-1]] + cooling
         dt_h, tf_h = _xy(heating, "Delta Temp [oC]", "TEMF [mV]")
         dt_c, tf_c = _xy(cooling, "Delta Temp [oC]", "TEMF [mV]")
         self.curve_heat.setData(dt_h, tf_h)
