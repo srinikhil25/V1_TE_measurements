@@ -73,6 +73,17 @@ desktop_qt/
 
 ---
 
+## Packaging / Installer
+
+To build a distributable Windows `setup.exe` or a portable ZIP, see the
+step-by-step guide in [`installer/README.md`](installer/README.md). Quick build:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File installer\build_installer.ps1
+```
+
+---
+
 ## Database
 
 SQLite at `%APPDATA%\TEMeasurement\te_measurement.db`, WAL mode.

@@ -187,6 +187,7 @@ class LoginWindow(QWidget):
             self.main_window = MainWindow(user)
             self.main_window.show()
             self.close()
+            self._warn_missing_prerequisites(self.main_window)
         else:
             self._show_error("Invalid username or password.")
             self.btn_login.setEnabled(True)
@@ -197,3 +198,47 @@ class LoginWindow(QWidget):
     def _show_error(self, msg: str):
         self.lbl_error.setText(msg)
         self.lbl_error.setVisible(bool(msg))
+
+    def _warn_missing_prerequisites(self, parent):
+        """After login, warn once if NI-VISA / the Optris SDK are not installed.
+
+        The dialog is skipped when everything is present, or when the user has
+        already ticked "Don't remind me again" for the same set of missing items.
+        """
+        try:
+            from ..core.prereqs import (
+                check_prerequisites, missing_items, load_acked, save_acked,
+            )
+            from PyQt6.QtWidgets import QMessageBox, QCheckBox
+
+            status = check_prerequisites()
+            items = missing_items(status)
+            if not items:
+                return
+
+            keys = {k for k, _, _ in items}
+            acked = load_acked()
+            if keys.issubset(acked):
+                return  # user already dismissed this (or a broader) set
+
+            body = "Some hardware prerequisites were not detected on this PC:\n\n"
+            for _key, title, desc in items:
+                body += f"•  {title}\n     {desc}\n\n"
+            body += ("The application will run normally — the features above stay "
+                     "unavailable until these are installed.")
+
+            box = QMessageBox(parent)
+            box.setIcon(QMessageBox.Icon.Warning)
+            box.setWindowTitle("Hardware prerequisites")
+            box.setText(body)
+            box.setStandardButtons(QMessageBox.StandardButton.Ok)
+            cb = QCheckBox("Don't remind me again")
+            box.setCheckBox(cb)
+            box.exec()
+            if cb.isChecked():
+                save_acked(acked | keys)
+        except Exception:
+            # A diagnostic convenience must never block login.
+            import logging
+            logging.getLogger(__name__).warning(
+                "prerequisite check failed", exc_info=True)

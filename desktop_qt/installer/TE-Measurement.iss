@@ -52,3 +52,46 @@ Name: "{autodesktop}\{#AppName}";    Filename: "{app}\{#AppExeName}"; Tasks: des
 
 [Run]
 Filename: "{app}\{#AppExeName}"; Description: "{cm:LaunchProgram,{#AppName}}"; Flags: nowait postinstall skipifsilent
+
+[Code]
+{ ---- Hardware prerequisite detection (informational, non-blocking) ---- }
+
+function NiVisaInstalled(): Boolean;
+begin
+  Result := FileExists(ExpandConstant('{sys}\visa64.dll'))
+         or FileExists(ExpandConstant('{sys}\visa32.dll'))
+         or RegKeyExists(HKLM64, 'SOFTWARE\National Instruments\NI-VISA')
+         or RegKeyExists(HKLM,   'SOFTWARE\National Instruments\NI-VISA');
+end;
+
+function OptrisInstalled(): Boolean;
+var
+  Otc: String;
+begin
+  Otc := GetEnv('OTC_SDK_DIR');
+  Result := ((Otc <> '') and DirExists(Otc))
+         or DirExists(ExpandConstant('{commonpf}\Optris\otcsdk'))
+         or FileExists('C:\IrDirectSDK\sdk\x64\libirimager.dll');
+end;
+
+procedure InitializeWizard();
+var
+  Msg: String;
+begin
+  Msg := '';
+  if not NiVisaInstalled() then
+    Msg := Msg
+      + '- NI-VISA runtime + GPIB driver  (REQUIRED for the Keithley 2401 / 2182A / 2700'  + #13#10
+      + '  and the Matsusada P4K-80M).  Without it the app cannot talk to any instrument.' + #13#10
+      + '  Get it from ni.com  (search "NI-VISA download").'                                + #13#10#13#10;
+  if not OptrisInstalled() then
+    Msg := Msg
+      + '- Optris IR camera SDK  (only needed for the thermal camera).'                     + #13#10
+      + '  OTC SDK 10.x, or the legacy IrDirectSDK.'                                         + #13#10#13#10;
+  if Msg <> '' then
+    MsgBox('Some hardware prerequisites were not detected on this PC:'  + #13#10#13#10
+      + Msg
+      + 'The application will still install and run normally, but the features above stay '
+      + 'unavailable until these are installed. See PREREQUISITES.txt in the install folder.',
+      mbInformation, MB_OK);
+end;
