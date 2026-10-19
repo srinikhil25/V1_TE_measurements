@@ -66,10 +66,17 @@ def _ni_visa_present() -> bool:
 
 
 def _optris_backend() -> Optional[str]:
-    otc = os.environ.get("OTC_SDK_DIR", _OTC_DEFAULT)
+    otc_dir, legacy_dll, legacy_cfg = _OTC_DEFAULT, _LEGACY_DLL, _LEGACY_CFG
+    try:
+        from .config import get_config
+        ir = get_config().ir_camera
+        otc_dir, legacy_dll, legacy_cfg = ir.otc_sdk_dir, ir.legacy_dll, ir.legacy_config
+    except Exception:
+        pass
+    otc = os.environ.get("OTC_SDK_DIR", otc_dir)
     if os.path.isdir(os.path.join(otc, "bindings", "python3")):
         return "otc"
-    if os.path.isfile(_LEGACY_DLL) and os.path.isfile(_LEGACY_CFG):
+    if os.path.isfile(legacy_dll) and os.path.isfile(legacy_cfg):
         return "legacy"
     return None
 

@@ -88,6 +88,9 @@ class HistoryPage(QWidget):
                     item.setTextAlignment(
                         Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft
                     )
+                    if col == 4 and m.end_reason:
+                        # aborted / stopped / error / interrupted: say why
+                        item.setToolTip(m.end_reason)
                     self.table.setItem(i, col, item)
         finally:
             db.close()

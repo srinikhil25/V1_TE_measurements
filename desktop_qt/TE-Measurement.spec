@@ -21,6 +21,9 @@ from PyInstaller.utils.hooks import collect_submodules
 hiddenimports = []
 hiddenimports += collect_submodules("app")          # all app.* modules (some imported lazily)
 hiddenimports += collect_submodules("sqlalchemy")   # dialects/drivers
+# Schema migrations (app/migrations) run through alembic.operations, which loads
+# its op implementations / plugins dynamically.
+hiddenimports += collect_submodules("alembic")
 hiddenimports += ["pyOptris", "bcrypt", "pyvisa", "openpyxl", "PIL", "pyqtgraph", "numpy"]
 
 a = Analysis(

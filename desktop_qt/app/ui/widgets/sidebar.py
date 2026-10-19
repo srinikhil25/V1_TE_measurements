@@ -28,12 +28,6 @@ ROLE_LABELS = {
     "researcher":  "Researcher",
 }
 
-INSTRUMENTS = {
-    "2182A":   "GPIB0::7::INSTR",
-    "2700":    "GPIB0::16::INSTR",
-    "PK4-80M": "GPIB0::15::INSTR",
-    "6221":    "GPIB0::24::INSTR",
-}
 
 # Sidebar colour constants
 _BG     = "#1F242C"
@@ -152,7 +146,8 @@ class Sidebar(QWidget):
         grid = QGridLayout()
         grid.setHorizontalSpacing(14)
         grid.setVerticalSpacing(6)
-        for i, name in enumerate(INSTRUMENTS):
+        from ...services.instrument_scan import INSTRUMENTS
+        for i, (_key, name, _full, _role) in enumerate(INSTRUMENTS):
             row = QHBoxLayout()
             row.setSpacing(7)
             dot = QLabel("●")
@@ -230,21 +225,21 @@ class Sidebar(QWidget):
         self.page_requested.emit(key)
 
     def _poll_instruments(self):
-        """Light, non-blocking check of which GPIB resources are visible."""
-        try:
-            import pyvisa
-            rm = pyvisa.ResourceManager()
-            available = set(rm.list_resources())
-            for name, addr in INSTRUMENTS.items():
-                online = addr in available
-                self._dots[name].setStyleSheet(
-                    f"background: transparent; font-size: 9px; "
-                    f"color: {'#5BAD6E' if online else '#C66262'};"
-                )
-            rm.close()
-        except Exception:
-            for dot in self._dots.values():
-                dot.setStyleSheet("background: transparent; color: #6B7280; font-size: 9px;")
+        """Background check of which configured GPIB addresses are visible."""
+        from ...services.instrument_scan import start_resource_scan
+        start_resource_scan(self._on_scan)
+
+    def _on_scan(self, available):
+        from ...services.instrument_scan import instrument_addresses
+        for _key, name, _full, addr in instrument_addresses():
+            dot = self._dots.get(name)
+            if dot is None:
+                continue
+            if available is None:
+                color = "#6B7280"
+            else:
+                color = "#5BAD6E" if addr in available else "#C66262"
+            dot.setStyleSheet(f"background: transparent; font-size: 9px; color: {color};")
 
     def paintEvent(self, event):
         super().paintEvent(event)

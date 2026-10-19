@@ -218,7 +218,8 @@ class DashboardPage(QWidget):
 
         badge_row = QHBoxLayout()
         badge_row.setSpacing(12)
-        for name in ["Keithley 2182A", "Keithley 2700", "PK160", "Keithley 6221"]:
+        from ...services.instrument_scan import INSTRUMENTS
+        for _key, _short, name, _role in INSTRUMENTS:
             badge = _InstrumentBadge(name)
             self._badges[name] = badge
             badge_row.addWidget(badge)
@@ -239,7 +240,7 @@ class DashboardPage(QWidget):
             ))
             actions_row.addWidget(_ActionCard(
                 "I-V Sweep",
-                "Sweep voltage and record current via Keithley 6221.",
+                "Source current or voltage and measure I-V with the Keithley 2401.",
                 "iv", self._navigate,
             ))
             actions_row.addStretch()
@@ -253,23 +254,16 @@ class DashboardPage(QWidget):
         outer.addWidget(scroll)
 
     def _check_instruments(self):
+        """Non-destructive check: which configured addresses are visible on VISA.
+
+        Runs in the background; does not connect to anything.
         """
-        Non-destructive instrument check: query pyvisa for visible resources.
-        Sets badges without connecting.
-        """
-        ADDR_MAP = {
-            "Keithley 2182A": "GPIB0::7::INSTR",
-            "Keithley 2700":  "GPIB0::16::INSTR",
-            "PK160":          "GPIB0::15::INSTR",
-            "Keithley 6221":  "GPIB0::24::INSTR",
-        }
-        try:
-            import pyvisa
-            rm = pyvisa.ResourceManager()
-            available = set(rm.list_resources())
-            for name, addr in ADDR_MAP.items():
-                self._badges[name].set_online(addr in available)
-            rm.close()
-        except Exception:
-            for badge in self._badges.values():
-                badge.set_online(False)
+        from ...services.instrument_scan import start_resource_scan
+        start_resource_scan(self._on_scan)
+
+    def _on_scan(self, available):
+        from ...services.instrument_scan import instrument_addresses
+        for _key, _short, name, addr in instrument_addresses():
+            badge = self._badges.get(name)
+            if badge is not None:
+                badge.set_online(bool(available) and addr in available)

@@ -2,7 +2,7 @@
 
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QHBoxLayout, QVBoxLayout,
-    QStackedWidget, QStatusBar, QLabel, QMessageBox,
+    QStackedWidget, QStatusBar, QLabel, QMessageBox, QApplication,
 )
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QKeySequence, QShortcut
@@ -149,6 +149,8 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
 
     def _on_logout(self):
+        if not self._stop_running_measurements("Signing out"):
+            return
         reply = QMessageBox.question(
             self, "Sign Out",
             "Are you sure you want to sign out?",
@@ -163,3 +165,48 @@ class MainWindow(QMainWindow):
         self.login_window = LoginWindow()
         self.login_window.show()
         self.close()
+
+    # ------------------------------------------------------------------
+    # Run guard: never leave the heater / SourceMeter driving with no UI
+    # ------------------------------------------------------------------
+
+    def _stop_running_measurements(self, action: str) -> bool:
+        """If a measurement is running, confirm, stop it and switch sources off.
+
+        Returns True when it is safe to continue (nothing running, or the run
+        was stopped), False if the operator cancelled.
+        """
+        from ..services.measurement_service import (
+            any_measurement_running, stop_all_measurements)
+        if not any_measurement_running():
+            return True
+        reply = QMessageBox.warning(
+            self, "Measurement running",
+            f"A measurement is still running.\n\n{action} will stop it and "
+            "switch the heater / SourceMeter output off. Data measured so far "
+            "is kept.\n\nStop the measurement?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Cancel,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return False
+        self.status_lbl.setText("Stopping measurement — switching heater off…")
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        QApplication.processEvents()
+        try:
+            ok = stop_all_measurements()
+        finally:
+            QApplication.restoreOverrideCursor()
+        if not ok:
+            QMessageBox.critical(
+                self, "Heater may still be on",
+                "The measurement did not confirm it stopped.\n\n"
+                "Check the power supply and switch its output OFF by hand.",
+            )
+        return True
+
+    def closeEvent(self, event):
+        if not self._stop_running_measurements("Closing the application"):
+            event.ignore()
+            return
+        event.accept()

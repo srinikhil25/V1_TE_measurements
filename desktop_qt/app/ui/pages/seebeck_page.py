@@ -812,7 +812,8 @@ class SeebeckPage(QWidget):
         status = svc.get_status()
 
         phase = status.get("phase") or "idle"
-        if not svc.is_active():
+        run_ended = not svc.is_active()
+        if run_ended:
             phase = "error" if "error" in status.get("status", "") else "finished"
             self._timer.stop()
             self.btn_start.setEnabled(True)
@@ -833,6 +834,10 @@ class SeebeckPage(QWidget):
             parts.append(f"step {step} / {total}")
         if remaining is not None:
             parts.append(f"remaining {int(remaining)//60:02d}:{int(remaining)%60:02d}")
+        if status.get("invalid_reads"):
+            parts.append(f"⚠ {status['invalid_reads']} invalid TC reading(s)")
+        if status.get("db_warning"):
+            parts.append("⚠ NOT SAVED")
         text = "  ·  ".join(parts)
         self.lbl_step.setText(text)
         self.lbl_step.setVisible(bool(text))
@@ -845,6 +850,23 @@ class SeebeckPage(QWidget):
         new_analysis = svc.get_analysis()
         if new_analysis and len(new_analysis) != len(self._analysis):
             self._analysis = new_analysis
+
+        if run_ended:
+            self._report_run_end(status)
+
+    def _report_run_end(self, status: dict):
+        """Tell the operator why a run ended early, and if it was not saved."""
+        reason = status.get("end_reason")
+        db_warning = status.get("db_warning")
+        if "error" in (status.get("status") or ""):
+            title = ("Safety abort — heater switched off"
+                     if reason and reason.startswith("Safety abort") else "Measurement error")
+            msg = reason or status.get("status")
+            if db_warning:
+                msg += "\n\n" + db_warning
+            QMessageBox.critical(self, title, msg)
+        elif db_warning:
+            QMessageBox.warning(self, "Measurement not saved", db_warning)
 
     # ------------------------------------------------------------------
     # Refresh

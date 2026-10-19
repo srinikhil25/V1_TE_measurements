@@ -42,11 +42,45 @@ def get_session():
 
 
 def init_db() -> None:
-    """Create tables and seed development accounts."""
-    from ..models.db_models import Base as ModelBase  # noqa: F401 — registers models
-    ModelBase.metadata.create_all(bind=engine)
+    """Migrate the schema to the current revision and seed development accounts.
+
+    Raises if the migration fails (the database is backed up first and left at
+    its previous revision); the caller must not start the app on a half-known
+    schema.
+    """
+    from ..migrations import upgrade_database
+    from ..models import db_models  # noqa: F401 — registers models
+
+    applied = upgrade_database(get_db_path())
+    if applied:
+        logger.info("Database schema migrated: %s", ", ".join(applied))
+    _mark_interrupted_runs()
     _seed_dev_accounts()
     logger.info("Database ready at %s", get_db_path())
+
+
+def _mark_interrupted_runs() -> None:
+    """Runs still 'running' at startup were cut off by a crash or forced exit.
+
+    Their rows up to the last saved point are kept; only the status changes so
+    History does not show them as live.
+    """
+    from ..models.db_models import Measurement
+
+    db = SessionLocal()
+    try:
+        orphans = db.query(Measurement).filter(Measurement.status == "running").all()
+        for m in orphans:
+            m.status = "interrupted"
+            m.end_reason = m.end_reason or (
+                "Application closed or crashed during the run; "
+                "data up to the last saved point is kept.")
+        if orphans:
+            db.commit()
+            logger.warning("Marked %d unfinished run(s) as interrupted: %s",
+                           len(orphans), [m.id for m in orphans])
+    finally:
+        db.close()
 
 
 # ---------------------------------------------------------------------------

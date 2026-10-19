@@ -49,9 +49,12 @@ class Measurement(Base):
 
     id          = Column(Integer, primary_key=True, index=True)
     user_id     = Column(Integer, ForeignKey("users.id"), nullable=False)
-    lab_id      = Column(Integer, ForeignKey("labs.id"), nullable=False)
+    # Nullable: a super_admin (no lab) can still run and save measurements.
+    lab_id      = Column(Integer, ForeignKey("labs.id"), nullable=True)
     type        = Column(String(30), nullable=False)   # seebeck | iv
+    # running | finished | stopped | aborted | error | interrupted
     status      = Column(String(20), default="running")
+    end_reason  = Column(Text, nullable=True)          # why the run ended early
     sample_id   = Column(String(100), nullable=True)
     operator    = Column(String(100), nullable=True)
     notes       = Column(Text, nullable=True)
@@ -71,8 +74,9 @@ class MeasurementRow(Base):
     __tablename__ = "measurement_rows"
 
     id             = Column(Integer, primary_key=True, index=True)
-    measurement_id = Column(Integer, ForeignKey("measurements.id"), nullable=False)
-    seq            = Column(Integer, nullable=False)
+    measurement_id = Column(Integer, ForeignKey("measurements.id"), nullable=False,
+                            index=True)
+    seq           = Column(Integer, nullable=False)
     elapsed_s      = Column(Integer, nullable=True)
     data_json      = Column(Text, nullable=False)
 

@@ -8,11 +8,17 @@ IV sweep        — blocking run with progress/abort, DB persistence, linear fit
 import hashlib
 import json
 import logging
+import threading
 import time
 from datetime import datetime
 from typing import Callable, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
+
+# I-V run control: set while a sweep is driving the 2401, plus an abort
+# request the app can raise from any thread (logout / exit).
+_iv_active = threading.Event()
+_iv_abort = threading.Event()
 
 # ---------------------------------------------------------------------------
 # Lazy import of instrument layer (requires pyvisa at runtime)
@@ -161,6 +167,52 @@ def _ohmic_status(R_squared: Optional[float]) -> str:
 # IV Sweep (blocking — run from QThread)
 # ---------------------------------------------------------------------------
 
+def iv_running() -> bool:
+    """True while an I-V sweep is driving the 2401."""
+    return _iv_active.is_set()
+
+
+def request_iv_abort() -> None:
+    """Ask a running I-V sweep to stop at the next point (thread-safe)."""
+    _iv_abort.set()
+
+
+def any_measurement_running() -> bool:
+    """True while a Seebeck run or an I-V sweep is active."""
+    try:
+        from ..instruments.session_manager import _managers
+        if any(m.is_running() for m in list(_managers)):
+            return True
+    except Exception:
+        pass
+    return _iv_active.is_set()
+
+
+def stop_all_measurements(timeout_s: float = 30.0) -> bool:
+    """Stop every running measurement and switch the sources off.
+
+    Called on logout and application exit. Returns True if everything stopped
+    within the timeout.
+    """
+    ok = True
+    try:
+        from ..instruments.session_manager import shutdown_all_sessions
+        ok = shutdown_all_sessions(timeout_s=timeout_s)
+    except Exception as exc:
+        logger.critical("Stopping Seebeck run failed: %s", exc)
+        ok = False
+    if _iv_active.is_set():
+        logger.warning("Stopping running I-V sweep")
+        _iv_abort.set()
+        deadline = time.monotonic() + timeout_s
+        while _iv_active.is_set() and time.monotonic() < deadline:
+            time.sleep(0.05)
+        if _iv_active.is_set():
+            logger.critical("I-V sweep did not stop within %.0f s", timeout_s)
+            ok = False
+    return ok
+
+
 def run_iv_sweep(
     # Sweep definition
     source_mode: str = "current",  # "current" = source I/measure V, "voltage" = source V/measure I
@@ -197,6 +249,10 @@ def run_iv_sweep(
     - source_mode "voltage": 2401 sources voltage, measures current.
     four_wire selects 4-wire remote sense (true 4-probe) vs 2-wire.
 
+    Each point is saved to the database as soon as it is measured, so an
+    abort or crash keeps every point taken so far. The stored status is
+    "finished", "stopped" (aborted by the operator) or "error".
+
     Returns:
         {
             "points": [{"voltage", "current", "resistance", "resistivity", "conductivity"}, ...],
@@ -206,43 +262,59 @@ def run_iv_sweep(
             "temperature_C": float or None,
             "measurement_id": int or None,
             "aborted": bool,
+            "db_warning": str or None,   # set when the sweep was NOT (fully) saved
         }
     """
     if points < 2:
         raise ValueError("points must be >= 2")
+    if _iv_active.is_set():
+        raise RuntimeError("An I-V sweep is already running.")
 
-    SeebeckSystem = _get_seebeck_system()
-    system = SeebeckSystem()
+    _iv_abort.clear()
+    _iv_active.set()
 
-    # Build sweep sequence (current or voltage values)
-    step = (stop - start) / (points - 1)
-    forward = [start + i * step for i in range(points)]
-    if bidirectional:
-        # forward then reverse, avoid duplicating the last point
-        sequence = forward + [start + i * step for i in range(points - 2, -1, -1)]
-    else:
-        sequence = forward
-
-    if not system.connect_all():
-        raise RuntimeError("Failed to connect to instruments.")
-
-    # Optional: configure 2700 for temperature and read once at start
-    temperature_C: Optional[float] = None
-    try:
-        if system.k2700.connected:
-            system.k2700.configure_measurement()
-        temperature_C = system.get_temperature_avg_c()
-    except Exception:
-        pass
+    def _aborted() -> bool:
+        return _iv_abort.is_set() or bool(abort_check and abort_check())
 
     results: List[Dict] = []
     measurement_id: Optional[int] = None
     db = None
     measurement_obj = None
+    db_warning: Optional[str] = None
+    temperature_C: Optional[float] = None
+    outcome = "error"
+    end_reason: Optional[str] = None
+    system = None
 
     try:
-        # Create DB record if user/lab provided
-        if _user_id is not None and _lab_id is not None:
+        SeebeckSystem = _get_seebeck_system()
+        system = SeebeckSystem()
+
+        # Build sweep sequence (current or voltage values)
+        step = (stop - start) / (points - 1)
+        forward = [start + i * step for i in range(points)]
+        if bidirectional:
+            # forward then reverse, avoid duplicating the last point
+            sequence = forward + [start + i * step for i in range(points - 2, -1, -1)]
+        else:
+            sequence = forward
+
+        if not system.connect_all():
+            end_reason = "Failed to connect to instruments."
+            raise RuntimeError(end_reason)
+
+        # Optional: configure 2700 for temperature and read once at start
+        try:
+            if system.k2700.connected:
+                system.k2700.configure_measurement()
+            temperature_C = system.get_temperature_avg_c()
+        except Exception:
+            pass
+
+        # Create DB record (lab may be None, e.g. super_admin)
+        if _user_id is None:
+            db_warning = "Not signed in: this sweep is NOT saved to History."
+        else:
             try:
                 from ..core.database import get_session
                 from ..models.db_models import Measurement
@@ -272,6 +344,7 @@ def run_iv_sweep(
                         "length": length,
                         "width": width,
                         "thickness": thickness,
+                        "temperature_C": temperature_C,
                     }, default=str),
                     started_at=datetime.utcnow(),
                 )
@@ -281,10 +354,12 @@ def run_iv_sweep(
                 measurement_id = measurement_obj.id
             except Exception as e:
                 logger.error("IV: failed to create Measurement: %s", e)
+                db_warning = f"Database error: this sweep is NOT saved to History ({e})."
                 if db:
                     db.rollback()
                     db.close()
                 db = None
+                measurement_obj = None
 
         # Single SourceMeter (2401) handles both source modes. Compliance is the
         # limit on the MEASURED quantity: volts when sourcing current, amps when
@@ -304,8 +379,9 @@ def run_iv_sweep(
         size_factor = 1.0
         if geometry == "4pp":
             size_factor = collinear_4pp_size_factor(spacing, length, width)
+        t_start = time.monotonic()
         for idx, level in enumerate(sequence):
-            if abort_check and abort_check():
+            if _aborted():
                 break
             system.k2401.set_level(level)
             time.sleep(delay_s)
@@ -320,38 +396,53 @@ def run_iv_sweep(
                 pt = {"voltage": v, "current": i, "resistance": r}
             _enrich_point(pt, length, width, thickness, geometry, spacing, size_factor)
             results.append(pt)
+            # Persist every point immediately.
+            if db is not None and measurement_obj is not None:
+                try:
+                    from ..models.db_models import MeasurementRow
+                    db.add(MeasurementRow(
+                        measurement_id=measurement_obj.id,
+                        seq=len(results),
+                        elapsed_s=int(time.monotonic() - t_start),
+                        data_json=json.dumps(pt, default=str),
+                    ))
+                    db.commit()
+                except Exception as e:
+                    logger.error("IV: failed to insert MeasurementRow: %s", e)
+                    db_warning = ("Database write failed: some points may be "
+                                  f"missing from History ({e}).")
+                    db.rollback()
             if progress_callback:
                 progress_callback(idx, pt)
         system.k2401.output_off()
-
-        system.disconnect_all()
+        if _aborted():
+            outcome, end_reason = "stopped", "Aborted by operator"
+        else:
+            outcome = "finished"
     except Exception as exc:
         logger.error("IV sweep error: %s", exc)
-        if system.k2401.connected:
-            try:
-                system.k2401.output_off()
-            except Exception:
-                pass
-        system.disconnect_all()
+        outcome = "error"
+        end_reason = end_reason or f"Error: {exc}"
         raise
     finally:
+        if system is not None:
+            if system.k2401.connected:
+                try:
+                    system.k2401.output_off()
+                except Exception:
+                    logger.critical("IV: 2401 output-off failed during cleanup")
+            try:
+                system.disconnect_all()
+            except Exception as exc:
+                logger.error("IV: disconnect_all failed: %s", exc)
         if db is not None and measurement_obj is not None:
             try:
-                from ..models.db_models import MeasurementRow, MeasurementIntegrity
+                from ..models.db_models import MeasurementIntegrity
 
-                # Persist all rows
-                for seq, row in enumerate(results, start=1):
-                    mr = MeasurementRow(
-                        measurement_id=measurement_obj.id,
-                        seq=seq,
-                        elapsed_s=None,
-                        data_json=json.dumps(row, default=str),
-                    )
-                    db.add(mr)
                 # Integrity hash
                 if results:
                     canonical = json.dumps(
-                        results, sort_keys=True, separators=(",", ":")
+                        results, sort_keys=True, separators=(",", ":"), default=str
                     )
                     digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
                     integ = (
@@ -368,7 +459,8 @@ def run_iv_sweep(
                         )
                     else:
                         integ.data_hash = digest
-                measurement_obj.status = "finished"
+                measurement_obj.status = outcome
+                measurement_obj.end_reason = end_reason
                 measurement_obj.finished_at = datetime.utcnow()
                 db.commit()
             except Exception as e:
@@ -376,6 +468,7 @@ def run_iv_sweep(
                 db.rollback()
             finally:
                 db.close()
+        _iv_active.clear()
 
     # Fit and ohmic status
     fit_R, fit_R_squared = _linear_fit_resistance(results)
@@ -388,7 +481,8 @@ def run_iv_sweep(
         "ohmic_status": ohmic,
         "temperature_C": temperature_C,
         "measurement_id": measurement_id,
-        "aborted": bool(abort_check and abort_check()),
+        "aborted": outcome == "stopped",
+        "db_warning": db_warning,
     }
 
 

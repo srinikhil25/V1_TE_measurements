@@ -648,6 +648,8 @@ class IVPage(QWidget):
             msg += f" Saved to history (id={mid})."
         if result.get("aborted"):
             msg = "Aborted — " + msg
+        if result.get("db_warning"):
+            msg += "  ⚠ " + result["db_warning"]
         self.lbl_status.setText(msg)
 
     def _update_metric_cards(self):

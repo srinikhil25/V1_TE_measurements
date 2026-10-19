@@ -48,13 +48,17 @@ class IrCameraConfig:
     Update fields here at any time; changes take effect on the next connect().
     Accessible via ``IrCameraService().config``.
     """
+    # Defaults come from [ir_camera] in the rig config; OTC_SDK_DIR overrides.
     otc_sdk_dir:   str = field(
-        default_factory=lambda: os.environ.get(
-            "OTC_SDK_DIR", r"C:\Program Files\Optris\otcsdk"
-        )
+        default_factory=lambda: os.environ.get("OTC_SDK_DIR", _cfg_ir().otc_sdk_dir)
     )
-    legacy_dll:    str = r"C:\IrDirectSDK\sdk\x64\libirimager.dll"
-    legacy_config: str = r"C:\IrDirectSDK\generic.xml"
+    legacy_dll:    str = field(default_factory=lambda: _cfg_ir().legacy_dll)
+    legacy_config: str = field(default_factory=lambda: _cfg_ir().legacy_config)
+
+
+def _cfg_ir():
+    from ..core.config import get_config
+    return get_config().ir_camera
 
 
 _CONNECT_TIMEOUT = 20.0   # seconds to wait for first frame after usb_init

@@ -1,0 +1,37 @@
+name: Desktop app tests
+
+on:
+  push:
+    paths: ["desktop_qt/**", ".github/workflows/desktop-tests.yml"]
+  pull_request:
+    paths: ["desktop_qt/**", ".github/workflows/desktop-tests.yml"]
+
+jobs:
+  test:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: desktop_qt
+    env:
+      QT_QPA_PLATFORM: offscreen
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: |
+            desktop_qt/requirements.txt
+            desktop_qt/requirements-dev.txt
+
+      - name: Install dependencies
+        # pyOptris (thermal camera, git dependency) is not needed by the tests.
+        shell: bash
+        run: |
+          grep -v -i "pyoptris" requirements.txt > requirements-ci.txt
+          python -m pip install --upgrade pip
+          pip install -r requirements-ci.txt pytest pytest-qt
+
+      - name: Run tests
+        run: python -m pytest -q

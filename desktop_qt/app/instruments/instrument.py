@@ -196,14 +196,17 @@ class PK480M:
             return False
     def disconnect(self):
         if self.instrument:
+            # Output off (every step attempted, failures logged) before handing
+            # the front panel back and closing the session.
+            if not self.output_off():
+                logger.error("PK4-80M: output-off before disconnect could not be "
+                             "confirmed — CHECK THE FRONT PANEL.")
             try:
-                # Switch output off and return to local before closing.
-                self.instrument.write("#1 SW0")
                 time.sleep(0.1)
                 self.instrument.write("#1 LCL")
                 time.sleep(0.1)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning("PK4-80M: return-to-local failed: %s", exc)
             try:
                 self.instrument.close()
             except Exception as e:
@@ -258,13 +261,40 @@ class PK480M:
         self.instrument.write(f"#1 VCN {vcn:.3f}")   # then drive
         logger.info("PK4-80M set voltage: %.3f V → VCN %.3f%%", volts, vcn)
         return True
-    def output_off(self):
-        if not self.connected:
+    def output_off(self, retries: int = 2) -> bool:
+        """Switch the heater output off. Returns True only if SW0 was sent.
+
+        Safety-critical, so every step is attempted independently: a failure
+        on one command never skips the next. Remote is re-asserted first —
+        interleaved reads of the other GPIB instruments drop this supply out
+        of remote, and commands sent in local mode are ignored.
+        """
+        if not self.connected or self.instrument is None:
             return False
-        self.instrument.write("#1 VCN 0")   # drive voltage to zero first
-        self.instrument.write("#1 SW0")      # then output off
-        logger.info("PK4-80M output off")
-        return True
+        steps = (
+            ("#1 REN", "re-assert remote"),
+            ("#1 VCN 0", "drive voltage to zero"),
+            ("#1 SW0", "output off"),
+        )
+        sw0_sent = False
+        for cmd, what in steps:
+            for attempt in range(1, retries + 1):
+                try:
+                    self.instrument.write(cmd)
+                    if cmd == "#1 SW0":
+                        sw0_sent = True
+                    break
+                except Exception as exc:
+                    logger.error("PK4-80M %s (%s) failed, attempt %d/%d: %s",
+                                 cmd, what, attempt, retries, exc)
+                    time.sleep(0.2)
+        if sw0_sent:
+            logger.info("PK4-80M output off")
+        else:
+            logger.critical("PK4-80M: OUTPUT-OFF COMMAND COULD NOT BE SENT — "
+                            "the heater may still be powered. Switch the supply "
+                            "off at the front panel.")
+        return sw0_sent
 
     # ── live monitor readback (VMON / IMON) ───────────────────────────────────
     def _read_monitor_count(self, cmd: str) -> Optional[int]:
@@ -313,6 +343,7 @@ class Keithley2700:
         self.instrument = None
         self.connected = False
         self.measurement_data = []
+        self.open_tc_detect = True   # set from the rig config by SeebeckSystem
     def connect(self, rm=None):
         # Disconnect first if already connected
         if self.connected and self.instrument:
@@ -369,6 +400,15 @@ class Keithley2700:
         # −5 °C in a 25 °C room).
         self.instrument.write(":TEMP:TC:RJUN:RSEL INT")
         self.instrument.write(f":TEMP:NPLC {nplc}")
+        # Open-thermocouple detection: a broken/unplugged TC reads as overflow
+        # (~9.9e37) instead of a floating, plausible-looking value, so the
+        # software safety monitor can reject it. Configurable per rig.
+        if self.open_tc_detect:
+            try:
+                self.instrument.write(":TEMP:TC:ODET ON")
+                logger.info("Keithley 2700 open-thermocouple detection ON")
+            except Exception as exc:
+                logger.warning("Could not enable 2700 open-TC detection: %s", exc)
         logger.info(f"Configured Keithley 2700 for channel {channel}")
         print(f"Configured Keithley 2700 for channel {channel}")
         return True
@@ -785,8 +825,32 @@ class SeebeckSystem:
         # are individually bench-verified (IMON query times out; ch116 DCV read
         # disturbs the temperature reads). Flip to True only after bring-up.
         self.enable_heater_monitors = False
+
+    def apply_config(self, cfg=None):
+        """Load addresses / open-TC detection from the rig config.
+
+        Called at the start of every connect_all(), so values saved on the
+        Settings page take effect on the next connection without a restart.
+        """
+        if cfg is None:
+            from ..core.config import get_config
+            cfg = get_config()
+        self.k2182a.resource_name = cfg.instruments.k2182a
+        self.k2700.resource_name = cfg.instruments.k2700
+        self.pk.resource_name = cfg.instruments.pk480m
+        self.k2401.resource_name = cfg.instruments.k2401
+        self.k2700.open_tc_detect = cfg.thermocouples.open_tc_detect
+        self._timeouts_ms = {
+            "k2182a": cfg.visa_timeout_ms.k2182a,
+            "k2700": cfg.visa_timeout_ms.k2700,
+            "pk160": cfg.visa_timeout_ms.pk480m,
+            "k2401": cfg.visa_timeout_ms.k2401,
+        }
+        return cfg
+
     def connect_all(self):
         """Connect to all instruments. Returns True only if all connections succeed."""
+        self.apply_config()
         # Always start from a fresh ResourceManager so no stale VISA state
         # from a previous run can lock the instruments.
         if self.rm is not None:
@@ -809,12 +873,21 @@ class SeebeckSystem:
             'k2401': self.k2401.connect(self.rm)   # SourceMeter (was 6221) at GPIB 24
         }
 
-        # Log connection status for each instrument
+        # Log connection status; apply the configured VISA timeout per instrument.
+        drivers = {"k2182a": self.k2182a, "k2700": self.k2700,
+                   "pk160": self.pk160, "k2401": self.k2401}
         for name, success in results.items():
             if not success:
                 logger.error(f"Failed to connect to {name}")
-            else:
-                logger.info(f"Successfully connected to {name}")
+                continue
+            logger.info(f"Successfully connected to {name}")
+            timeout = getattr(self, "_timeouts_ms", {}).get(name)
+            inst = getattr(drivers[name], "instrument", None)
+            if timeout and inst is not None:
+                try:
+                    inst.timeout = timeout
+                except Exception as exc:
+                    logger.warning("Could not set VISA timeout on %s: %s", name, exc)
 
         ok = all(results.values())
         self.connected = ok
@@ -848,11 +921,12 @@ class SeebeckSystem:
         geometry, and actuates the in-plane/out-plane relay. Call this BEFORE
         initialize_all() so the compliance is applied at output-on.
         """
+        from ..core.config import get_config
         mode = "out_plane" if str(probe_mode).lower() == "out_plane" else "in_plane"
-        limits = HEATER_LIMITS[mode]
+        limits = get_config().heater_limit(mode)
         self.probe_mode = mode
-        self.heater_voltage_drive_max_V = limits["voltage_drive_max_V"]
-        self.heater_current_max_A = limits["current_max_A"]
+        self.heater_voltage_drive_max_V = limits.voltage_drive_max_V
+        self.heater_current_max_A = limits.current_max_A
         self.set_relay(mode)
 
     def set_relay(self, probe_mode: str):
@@ -892,10 +966,11 @@ class SeebeckSystem:
         self.last_drive_volts = drive_volts        # for the data table / live view
         self.last_drive_amps = amps
         self.pk.set_voltage_volts(drive_volts)
-    def output_off(self):
+    def output_off(self) -> bool:
+        """Heater off. Returns True if the off command reached the supply."""
         self.last_drive_volts = 0.0
         self.last_drive_amps = 0.0
-        self.pk.output_off()
+        return self.pk.output_off()
     def measure_all(self, temp1_channel=102, temp2_channel=104) -> Dict[str, Optional[float]]:
         # Acquisition order: V then T1 then T2 (staggered). For best accuracy, V and T
         # should be simultaneous; staggered acquisition can introduce several-% error in S.

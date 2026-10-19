@@ -72,12 +72,53 @@ def main() -> None:
     app.setFont(font)
     app.setStyleSheet(QSS)
 
-    init_db()
+    from PyQt6.QtCore import QLockFile
+    from PyQt6.QtWidgets import QMessageBox
+    from app.core.paths import get_app_dir
+
+    # One instance only: two copies would fight over the same GPIB
+    # instruments, and the second would mark the first's live run as
+    # interrupted in the database.
+    lock = QLockFile(str(get_app_dir() / "te_measurement.lock"))
+    lock.setStaleLockTime(0)
+    if not lock.tryLock(100):
+        QMessageBox.warning(None, "TE Measurement",
+                            "TE Measurement is already running on this PC.")
+        sys.exit(1)
+
+    try:
+        init_db()
+    except Exception as exc:
+        logging.getLogger("startup").exception("Database initialisation failed")
+        QMessageBox.critical(
+            None, "Database error",
+            "The measurement database could not be opened or upgraded:\n\n"
+            f"{exc}\n\nNo changes were kept. A backup copy is in the "
+            "application data folder (if an upgrade was attempted).\n"
+            f"Log file: {log_path}")
+        sys.exit(1)
+
+    from app.core.config import config_path, get_config, load_warnings
+    get_config()
+    if load_warnings():
+        QMessageBox.warning(
+            None, "Configuration problem",
+            f"{config_path()} has problems, so built-in defaults are in use:\n\n"
+            + "\n".join(load_warnings()[:12])
+            + "\n\nFix them in Settings (saving rewrites the file) or edit the file.")
+
+    # Backstop for every exit path that still runs the event loop to the end
+    # (window close is guarded by MainWindow.closeEvent with a confirmation).
+    from app.services.measurement_service import stop_all_measurements
+    app.aboutToQuit.connect(lambda: stop_all_measurements(timeout_s=30))
 
     window = LoginWindow()
     window.show()
 
-    sys.exit(app.exec())
+    code = app.exec()
+    stop_all_measurements(timeout_s=30)
+    lock.unlock()
+    sys.exit(code)
 
 
 if __name__ == "__main__":
