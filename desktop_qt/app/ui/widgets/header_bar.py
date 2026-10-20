@@ -66,6 +66,19 @@ class HeaderBar(QWidget):
         lay.addWidget(self.lbl_title)
         lay.addStretch()
 
+        # Simulator badge — never let a simulated session pass for the real rig.
+        from ...instruments.visa_backend import is_simulated
+        self.sim_badge = QLabel("SIMULATED RIG")
+        self.sim_badge.setObjectName("SimBadge")
+        self.sim_badge.setStyleSheet(
+            f"#SimBadge {{ color: #1A1300; background: #F5B83D; border-radius: 4px;"
+            f" padding: 3px 8px; font-weight: 700; letter-spacing: 0.5px; }}")
+        self.sim_badge.setToolTip(
+            "TE_VISA_BACKEND is set: instruments are simulated (pyvisa-sim). Runs are "
+            "saved, but marked as simulated in their provenance. Readings are fixed values.")
+        self.sim_badge.setVisible(is_simulated())
+        lay.addWidget(self.sim_badge, 0, Qt.AlignmentFlag.AlignVCenter)
+
         # Run-state pill
         self.pill = QFrame()
         self.pill.setObjectName("RunPill")

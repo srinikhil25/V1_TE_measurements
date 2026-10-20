@@ -1,0 +1,170 @@
+# Simulated TE measurement rig for pyvisa-sim.
+#
+#   TE_VISA_BACKEND=sim  python main.py        → the app runs against this file
+#   tests/test_sim_rig.py                       → drivers exercised end to end
+#
+# Each device accepts exactly the commands the drivers in instrument.py send;
+# anything else is answered with SIM_UNKNOWN_COMMAND (and the sim tests fail on
+# it). Readings are fixed values, so a simulated Seebeck run has ΔT = 0: the
+# file checks the instrument protocol, not the physics.
+#
+# Numeric setters use "{:s}" plus a float spec: pyvisa-sim's own float
+# pattern rejects "0", "1" and signed values, which the drivers do send.
+#
+# Write terminations mirror what the drivers send: pyvisa's default "\r\n"
+# for the Keithleys, "\r\n" for the Matsusada (set explicitly in PK480M).
+
+spec: "1.1"
+
+devices:
+
+  keithley_2182a:
+    eom:
+      GPIB INSTR: {q: "\r\n", r: "\n"}
+    error: SIM_UNKNOWN_COMMAND
+    dialogues:
+      - q: "*IDN?"
+        r: "KEITHLEY INSTRUMENTS INC.,MODEL 2182A,SIM0001,C02 (simulated)"
+      - q: "*RST"
+      - q: ":CONF:VOLT"
+      - q: ":VOLT:DIGITS 8"
+      - q: ":READ?"
+        r: "-1.250000E-04"
+    properties:
+      nplc:
+        default: 5.0
+        setter: {q: ":VOLT:NPLC {:s}"}
+        getter: {q: ":VOLT:NPLC?", r: "{:g}"}
+        specs: {type: float}
+
+  keithley_2700:
+    eom:
+      GPIB INSTR: {q: "\r\n", r: "\n"}
+    error: SIM_UNKNOWN_COMMAND
+    dialogues:
+      - q: "*IDN?"
+        r: "KEITHLEY INSTRUMENTS INC.,MODEL 2700,SIM0002,B09 (simulated)"
+      - q: "*RST"
+      - q: ":CONF:TEMP"
+      - q: ":UNIT:TEMP C"
+      - q: ":TEMP:TRAN TC"
+      - q: ":TEMP:TC:TYPE K"
+      - q: ":TEMP:TC:RJUN:RSEL INT"
+      - q: ":TEMP:TC:ODET ON"
+      - q: ":READ?"
+        r: "+2.500000E+01"
+    properties:
+      channel:
+        default: 101
+        setter: {q: ":ROUT:CLOS (@{:d})"}
+        getter: {q: ":ROUT:CLOS?", r: "(@{:d})"}
+      nplc:
+        default: 1.0
+        setter: {q: ":TEMP:NPLC {:s}"}
+        getter: {q: ":TEMP:NPLC?", r: "{:g}"}
+        specs: {type: float}
+
+  matsusada_p4k80m:
+    # Never sent *IDN? or any SCPI: only its own "#1 ..." protocol.
+    eom:
+      GPIB INSTR: {q: "\r\n", r: "\r"}
+    error: SIM_UNKNOWN_COMMAND
+    dialogues:
+      - q: "REN"
+      - q: "#1 REN"
+      - q: "#1 LCL"
+      - q: "#1 IMON"
+        r: "0000"
+      - q: "#1 VMON"
+        r: "0000"
+    properties:
+      output:
+        default: 0
+        setter: {q: "#1 SW{:s}"}
+        getter: {q: "#1 SW?", r: "{:d}"}
+        specs: {valid: [0, 1], type: int}
+      vcn_percent:
+        default: 0.0
+        setter: {q: "#1 VCN {:s}"}
+        getter: {q: "#1 VCN?", r: "{:g}"}
+        specs: {min: 0, max: 100, type: float}
+      icn_percent:
+        default: 0.0
+        setter: {q: "#1 ICN {:s}"}
+        getter: {q: "#1 ICN?", r: "{:g}"}
+        specs: {min: 0, max: 100, type: float}
+      ovp_percent:
+        default: 100.0
+        setter: {q: "#1 OVP {:s}"}
+        getter: {q: "#1 OVP?", r: "{:g}"}
+        specs: {min: 0, max: 110, type: float}
+
+  keithley_2401:
+    eom:
+      GPIB INSTR: {q: "\r\n", r: "\n"}
+    error: SIM_UNKNOWN_COMMAND
+    dialogues:
+      - q: "*IDN?"
+        r: "KEITHLEY INSTRUMENTS INC.,MODEL 2401,SIM0004,C32 (simulated)"
+      - q: "*RST"
+      - q: ":SYST:RSEN ON"
+      - q: ":SYST:RSEN OFF"
+      - q: ":SOUR:FUNC CURR"
+      - q: ":SOUR:FUNC VOLT"
+      - q: ":SOUR:CURR:MODE FIX"
+      - q: ":SOUR:VOLT:MODE FIX"
+      - q: ":SOUR:CURR:RANG:AUTO ON"
+      - q: ":SOUR:VOLT:RANG:AUTO ON"
+      - q: ":SENS:FUNC 'VOLT:DC'"
+      - q: ":SENS:FUNC 'CURR:DC'"
+      - q: ":SENS:VOLT:RANG:AUTO ON"
+      - q: ":SENS:CURR:RANG:AUTO ON"
+      - q: ":FORM:ELEM VOLT,CURR"
+      - q: ":READ?"
+        r: "+2.670000E-06,+1.000000E-02"
+    properties:
+      output:
+        default: "OFF"
+        setter: {q: ":OUTP {:s}"}
+        getter: {q: ":OUTP?", r: "{:s}"}
+        specs: {valid: ["ON", "OFF"], type: str}
+      source_current:
+        default: 0.0
+        setter: {q: ":SOUR:CURR {:s}"}
+        getter: {q: ":SOUR:CURR?", r: "{:g}"}
+        specs: {type: float}
+      source_voltage:
+        default: 0.0
+        setter: {q: ":SOUR:VOLT {:s}"}
+        getter: {q: ":SOUR:VOLT?", r: "{:g}"}
+        specs: {type: float}
+      volt_compliance:
+        default: 21.0
+        setter: {q: ":SENS:VOLT:PROT {:s}"}
+        getter: {q: ":SENS:VOLT:PROT?", r: "{:g}"}
+        specs: {type: float}
+      curr_compliance:
+        default: 0.1
+        setter: {q: ":SENS:CURR:PROT {:s}"}
+        getter: {q: ":SENS:CURR:PROT?", r: "{:g}"}
+        specs: {type: float}
+      volt_nplc:
+        default: 1.0
+        setter: {q: ":SENS:VOLT:NPLC {:s}"}
+        getter: {q: ":SENS:VOLT:NPLC?", r: "{:g}"}
+        specs: {type: float}
+      curr_nplc:
+        default: 1.0
+        setter: {q: ":SENS:CURR:NPLC {:s}"}
+        getter: {q: ":SENS:CURR:NPLC?", r: "{:g}"}
+        specs: {type: float}
+
+resources:
+  GPIB0::7::INSTR:
+    device: keithley_2182a
+  GPIB0::16::INSTR:
+    device: keithley_2700
+  GPIB0::15::INSTR:
+    device: matsusada_p4k80m
+  GPIB0::24::INSTR:
+    device: keithley_2401

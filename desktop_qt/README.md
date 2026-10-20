@@ -23,6 +23,31 @@ python main.py
 
 ---
 
+## Simulator Mode (no instruments)
+
+The app can run against a simulated rig (pyvisa-sim) — useful for training,
+demos and testing on a PC without GPIB hardware.
+
+```powershell
+pip install -r requirements-dev.txt
+$env:TE_VISA_BACKEND = "sim"
+python main.py
+```
+
+- The top bar shows **SIMULATED RIG** while this is active.
+- The rig is defined in `app/instruments/sim/te_rig.yaml`: the four instruments
+  at their usual GPIB addresses, accepting exactly the commands the drivers send.
+  Readings are fixed values (ΔT = 0), so a simulated Seebeck run checks the
+  workflow, not the physics.
+- Simulated runs **are saved** to the database, marked with a *Simulated rig*
+  chip in the Run library and `visa_backend` in the run's provenance. On the
+  lab PC, point `APPDATA` at a scratch folder first to keep them out of the lab
+  database.
+- `tests/test_sim_rig.py` runs the real drivers end-to-end against this file
+  and fails on any command the simulated instruments do not recognise.
+
+---
+
 ## Dev Accounts
 
 | Username     | Password     | Role          |

@@ -69,8 +69,8 @@ def start_resource_scan(on_done: Callable[[Optional[Set[str]]], None]) -> bool:
     def _work():
         found: Optional[Set[str]] = None
         try:
-            import pyvisa
-            rm = pyvisa.ResourceManager()
+            from ..instruments.visa_backend import resource_manager
+            rm = resource_manager()
             try:
                 found = set(rm.list_resources())
             finally:

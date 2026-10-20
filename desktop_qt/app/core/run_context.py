@@ -25,6 +25,15 @@ def _lib_version(name: str) -> Optional[str]:
         return None
 
 
+def _visa_backend() -> str:
+    """"default" (NI-VISA) or the simulated / alternative backend string."""
+    try:
+        from ..instruments.visa_backend import visa_backend
+        return visa_backend() or "default"
+    except Exception:
+        return "unknown"
+
+
 def build_run_context(instruments: Optional[Dict[str, Any]] = None,
                       cfg=None) -> Dict[str, Any]:
     from .config import config_path, get_config
@@ -46,4 +55,5 @@ def build_run_context(instruments: Optional[Dict[str, Any]] = None,
         "config_file": str(config_path()),
         "config": cfg.to_dict(),
         "instruments": instruments or {},
+        "visa_backend": _visa_backend(),
     }

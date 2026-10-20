@@ -2,3 +2,4 @@
 -r requirements.txt
 pytest>=8.0
 pytest-qt>=4.4
+pyvisa-sim>=0.6     # simulated rig: tests/test_sim_rig.py, TE_VISA_BACKEND=sim
