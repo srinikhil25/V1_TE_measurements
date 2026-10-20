@@ -20,6 +20,16 @@ logger = logging.getLogger(__name__)
 _iv_active = threading.Event()
 _iv_abort = threading.Event()
 
+# Held while checking for, and claiming, the instruments for a new run. The
+# Seebeck run and the I-V sweep open their own sessions to the same GPIB
+# instruments (2700, GPIB 24), so only one of them may run at a time.
+_run_claim = threading.Lock()
+
+IV_BLOCKS_SEEBECK = ("An I-V sweep is running. Wait for it to finish — the Seebeck "
+                     "run and the sweep share the GPIB instruments.")
+SEEBECK_BLOCKS_IV = ("A Seebeck run is in progress. Stop it first — the Seebeck run "
+                     "and the sweep share the GPIB instruments.")
+
 # ---------------------------------------------------------------------------
 # Lazy import of instrument layer (requires pyvisa at runtime)
 # ---------------------------------------------------------------------------
@@ -51,6 +61,7 @@ class SeebeckService:
         if cls._instance is None:
             cls._instance = super().__new__(cls)
             cls._instance._mgr = None
+            cls._instance.last_error = None
         return cls._instance
 
     def _manager(self):
@@ -78,10 +89,16 @@ class SeebeckService:
             # If anything goes wrong here, fall back to running without DB linkage.
             pass
 
-        mgr = self._manager()
-        if mgr.session_active:
-            return False
-        return mgr.start_session(params)
+        self.last_error = None
+        with _run_claim:
+            if _iv_active.is_set():
+                self.last_error = IV_BLOCKS_SEEBECK
+                return False
+            mgr = self._manager()
+            if mgr.session_active:
+                self.last_error = "A Seebeck run is already active."
+                return False
+            return mgr.start_session(params)
 
     def stop(self) -> None:
         if self._mgr and self._mgr.session_active:
@@ -177,15 +194,17 @@ def request_iv_abort() -> None:
     _iv_abort.set()
 
 
-def any_measurement_running() -> bool:
-    """True while a Seebeck run or an I-V sweep is active."""
+def _seebeck_running() -> bool:
     try:
         from ..instruments.session_manager import _managers
-        if any(m.is_running() for m in list(_managers)):
-            return True
+        return any(m.is_running() for m in list(_managers))
     except Exception:
-        pass
-    return _iv_active.is_set()
+        return False
+
+
+def any_measurement_running() -> bool:
+    """True while a Seebeck run or an I-V sweep is active."""
+    return _seebeck_running() or _iv_active.is_set()
 
 
 def stop_all_measurements(timeout_s: float = 30.0) -> bool:
@@ -267,11 +286,13 @@ def run_iv_sweep(
     """
     if points < 2:
         raise ValueError("points must be >= 2")
-    if _iv_active.is_set():
-        raise RuntimeError("An I-V sweep is already running.")
-
-    _iv_abort.clear()
-    _iv_active.set()
+    with _run_claim:
+        if _iv_active.is_set():
+            raise RuntimeError("An I-V sweep is already running.")
+        if _seebeck_running():
+            raise RuntimeError(SEEBECK_BLOCKS_IV)
+        _iv_abort.clear()
+        _iv_active.set()
 
     def _aborted() -> bool:
         return _iv_abort.is_set() or bool(abort_check and abort_check())

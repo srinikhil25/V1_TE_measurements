@@ -28,6 +28,7 @@ from PyQt6.QtWidgets import (
 from .. import theme as T
 from ..widgets.ir_camera_widget import IrCameraWidget
 from ..widgets.measurement_setup_dialog import MeasurementSetupDialog
+from ..widgets.plot_data import ColumnBuffer, fast_time_curve, thin
 from ..widgets.profile_preview import ProfilePreview, fmt_duration, profile_duration_s
 from ..widgets.tile import Tile, icon_button
 from ..widgets.ui_kit import (
@@ -98,6 +99,13 @@ class SeebeckPage(QWidget):
         self._data: List[Dict] = []
         self._analysis: List[Dict] = []
         self._table_row_count: int = 0
+        # Chart series, filled incrementally from self._data (UI-2). The rows
+        # in self._data stay complete; only what is drawn is reduced.
+        self._buf_time = ColumnBuffer(4)    # t, T1, T2, TEMF
+        self._buf_heat = ColumnBuffer(2)    # ΔT, TEMF (heating branch)
+        self._buf_cool = ColumnBuffer(2)    # ΔT, TEMF (cooling branch)
+        self._buf_s = ColumnBuffer(2)       # T0, S
+        self._rows_charted = 0
         self._profile_params: Dict = dict(self._DEFAULT_PROFILE)
         self._cooling_target: float = 5.0
         self._tiles: Dict[str, Tile] = {}
@@ -422,10 +430,11 @@ class SeebeckPage(QWidget):
         pi.getAxis("right").linkToView(self._vb_temf)
         self._vb_temf.setXLink(pi)
 
-        self.curve_t1 = pi.plot(pen=pen(T.SERIES_T1))
-        self.curve_t2 = pi.plot(pen=pen(T.SERIES_T2))
-        self.curve_temf = pg.PlotCurveItem(pen=pen(T.SERIES_TEMF, 1.6, dashed=True))
+        self.curve_t1 = fast_time_curve(pi.plot(pen=pen(T.SERIES_T1)))
+        self.curve_t2 = fast_time_curve(pi.plot(pen=pen(T.SERIES_T2)))
+        self.curve_temf = pg.PlotDataItem(pen=pen(T.SERIES_TEMF, 1.6, dashed=True))
         self._vb_temf.addItem(self.curve_temf)
+        fast_time_curve(self.curve_temf)  # only once it is inside its ViewBox
 
         def _sync_views():
             self._vb_temf.setGeometry(pi.vb.sceneBoundingRect())
@@ -625,6 +634,7 @@ class SeebeckPage(QWidget):
         self._data.clear()
         self._analysis.clear()
         self._table_row_count = 0
+        self._reset_chart_buffers()
         for curve in (self.curve_temf, self.curve_t1, self.curve_t2,
                       self.curve_heat, self.curve_cool, self.curve_s):
             curve.setData([], [])
@@ -670,8 +680,10 @@ class SeebeckPage(QWidget):
             "cooling_target_delta_t": self._cooling_target,
         }
 
-        if not SeebeckService().start(params):
-            QMessageBox.critical(self, "Start run", "The measurement could not be started.")
+        svc = SeebeckService()
+        if not svc.start(params):
+            QMessageBox.critical(self, "Start run", getattr(svc, "last_error", None)
+                                 or "The measurement could not be started.")
             return
 
         self._clear_results()
@@ -857,50 +869,48 @@ class SeebeckPage(QWidget):
         self.chip_fit.set(f"{len(rows)} bin(s)" if rows else "No data",
                           "info" if rows else "neutral")
 
+    def _reset_chart_buffers(self):
+        for b in (self._buf_time, self._buf_heat, self._buf_cool, self._buf_s):
+            b.clear()
+        self._rows_charted = 0
+
+    def _consume_new_rows(self):
+        """Move rows that arrived since the last poll into the chart buffers."""
+        if len(self._data) < self._rows_charted:      # a different run's data
+            self._reset_chart_buffers()
+        for r in self._data[self._rows_charted:]:
+            self._buf_time.append((r.get("Time [s]", 0), r.get("Temp1 [oC]"),
+                                   r.get("Temp2 [oC]"), r.get("TEMF [mV]")))
+            dt, tf = r.get("Delta Temp [oC]"), r.get("TEMF [mV]")
+            if r.get("branch") == "cooling":
+                # Cooling continues from the heating peak (max ΔT) and traces back down.
+                if len(self._buf_cool) == 0 and len(self._buf_heat):
+                    self._buf_cool.append(self._buf_heat.last())
+                if dt is not None and tf is not None:
+                    self._buf_cool.append((dt, tf))
+            elif dt is not None and tf is not None:
+                self._buf_heat.append((dt, tf))
+            t0, sv = r.get("T0 [K]"), r.get("S [µV/K]")
+            if t0 is not None and sv is not None:
+                self._buf_s.append((t0, sv))
+        self._rows_charted = len(self._data)
+
     def _refresh_charts(self):
         if not self._data:
             return
-        nan = float("nan")
+        self._consume_new_rows()
 
-        def _v(lst):
-            return [x if x is not None else nan for x in lst]
+        bt = self._buf_time
+        t = bt.col(0)
+        self.curve_temf.setData(t, bt.col(3))
+        self.curve_t1.setData(t, bt.col(1))
+        self.curve_t2.setData(t, bt.col(2))
 
-        times = [r.get("Time [s]", 0) for r in self._data]
-        t1 = [r.get("Temp1 [oC]") for r in self._data]
-        t2 = [r.get("Temp2 [oC]") for r in self._data]
-        temf = [r.get("TEMF [mV]") for r in self._data]
-
-        self.curve_temf.setData(times, _v(temf))
-        self.curve_t1.setData(times, _v(t1))
-        self.curve_t2.setData(times, _v(t2))
-
-        def _xy(rows, kx, ky):
-            xs, ys = [], []
-            for r in rows:
-                x, y = r.get(kx), r.get(ky)
-                if x is not None and y is not None:
-                    xs.append(x)
-                    ys.append(y)
-            return xs, ys
-
-        heating = [r for r in self._data if r.get("branch") != "cooling"]
-        cooling = [r for r in self._data if r.get("branch") == "cooling"]
-        # Cooling continues from the heating peak (max ΔT) and traces back down.
-        if heating and cooling:
-            cooling = [heating[-1]] + cooling
-        dt_h, tf_h = _xy(heating, "Delta Temp [oC]", "TEMF [mV]")
-        dt_c, tf_c = _xy(cooling, "Delta Temp [oC]", "TEMF [mV]")
-        self.curve_heat.setData(dt_h, tf_h)
-        self.curve_cool.setData(dt_c, tf_c)
-
-        s_pairs = [
-            (r["T0 [K]"], r["S [µV/K]"])
-            for r in self._data
-            if r.get("T0 [K]") is not None and r.get("S [µV/K]") is not None
-        ]
-        if s_pairs:
-            t0v, sv = zip(*s_pairs)
-            self.curve_s.setData(list(t0v), list(sv))
+        for curve, buf in ((self.curve_heat, self._buf_heat),
+                           (self.curve_cool, self._buf_cool),
+                           (self.curve_s, self._buf_s)):
+            if len(buf):
+                curve.setData(*thin(buf.col(0), buf.col(1)))
 
         # Data table — append only new rows
         new_count = len(self._data)

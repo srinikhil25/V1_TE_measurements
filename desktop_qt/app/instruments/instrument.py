@@ -3,6 +3,9 @@ import time
 from typing import Optional, Dict, List, Tuple
 import logging
 
+from .visa_backend import resource_manager
+from .visa_guard import guard, transaction as _txn, write_once
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -67,8 +70,8 @@ class Keithley2182A:
         
         try:
             if rm is None:
-                rm = pyvisa.ResourceManager()
-            self.instrument = rm.open_resource(self.resource_name)
+                rm = resource_manager()
+            self.instrument = guard(rm.open_resource(self.resource_name), "Keithley 2182A")
             self.instrument.timeout = 20000
             self.connected = True
             logger.info(f"Connected to Keithley 2182A at {self.resource_name}")
@@ -103,10 +106,11 @@ class Keithley2182A:
     def configure(self, nplc: float = 5.0):
         if not self.connected:
             return False
-        self.instrument.write("*RST")
-        self.instrument.write(":CONF:VOLT")
-        self.instrument.write(":VOLT:DIGITS 8")
-        self.instrument.write(f":VOLT:NPLC {max(0.01, min(10, nplc))}")
+        with _txn(self.instrument):
+            self.instrument.write("*RST")
+            self.instrument.write(":CONF:VOLT")
+            self.instrument.write(":VOLT:DIGITS 8")
+            self.instrument.write(f":VOLT:NPLC {max(0.01, min(10, nplc))}")
         logger.info("Configured Keithley 2182A")
         print("Configured Keithley 2182A")
         return True
@@ -175,8 +179,11 @@ class PK480M:
 
         try:
             if rm is None:
-                rm = pyvisa.ResourceManager()
-            self.instrument = rm.open_resource(self.resource_name)
+                rm = resource_manager()
+            # No device clear on timeout: the Matsusada parser is only ever sent
+            # its own "#1 ..." commands.
+            self.instrument = guard(rm.open_resource(self.resource_name), "PK4-80M",
+                                    clear_on_timeout=False)
             # CRITICAL: the Matsusada firmware parser needs CRLF on write and CR
             # on read. Without this the device silently ignores every command —
             # which is exactly why the app couldn't trigger it before.
@@ -202,9 +209,10 @@ class PK480M:
                 logger.error("PK4-80M: output-off before disconnect could not be "
                              "confirmed — CHECK THE FRONT PANEL.")
             try:
-                time.sleep(0.1)
-                self.instrument.write("#1 LCL")
-                time.sleep(0.1)
+                with _txn(self.instrument):
+                    time.sleep(0.1)
+                    self.instrument.write("#1 LCL")
+                    time.sleep(0.1)
             except Exception as exc:
                 logger.warning("PK4-80M: return-to-local failed: %s", exc)
             try:
@@ -228,16 +236,17 @@ class PK480M:
         if not self.connected:
             return False
         icn = max(0.0, min(100.0, current_limit_A / PK_RATED_CURRENT_A * 100.0))
-        self.instrument.write("REN")                      # bare REN (interface)
-        time.sleep(0.1)
-        self.instrument.write("#1 REN")                   # unit remote
-        time.sleep(0.1)
-        self.instrument.write(f"#1 ICN {icn:.3f}")        # current LIMIT (ceiling)
-        self.instrument.write(f"#1 OVP {ovp_percent}")
-        self.instrument.write(f"#1 VCN 0")                # voltage 0 → no output yet
-        time.sleep(0.1)
-        self.instrument.write("#1 SW1")                   # output on (VCN=0 → no drive)
-        time.sleep(0.3)
+        with _txn(self.instrument):
+            self.instrument.write("REN")                  # bare REN (interface)
+            time.sleep(0.1)
+            self.instrument.write("#1 REN")               # unit remote
+            time.sleep(0.1)
+            self.instrument.write(f"#1 ICN {icn:.3f}")    # current LIMIT (ceiling)
+            self.instrument.write(f"#1 OVP {ovp_percent}")
+            self.instrument.write(f"#1 VCN 0")            # voltage 0 → no output yet
+            time.sleep(0.1)
+            self.instrument.write("#1 SW1")               # output on (VCN=0 → no drive)
+            time.sleep(0.3)
         logger.info("Initialized PK4-80M (I-limit=%.2f A → ICN %.2f%%, OVP=%s%%, "
                     "VCN drive mode)", current_limit_A, icn, ovp_percent)
         return True
@@ -256,9 +265,10 @@ class PK480M:
         if not self.connected:
             return False
         vcn = max(0.0, min(100.0, volts / PK_RATED_VOLTAGE_V * 100.0))
-        self.instrument.write("#1 REN")              # re-assert remote
-        self.instrument.write("#1 SW1")              # re-assert output ON
-        self.instrument.write(f"#1 VCN {vcn:.3f}")   # then drive
+        with _txn(self.instrument):                  # nothing may land between these
+            self.instrument.write("#1 REN")          # re-assert remote
+            self.instrument.write("#1 SW1")          # re-assert output ON
+            self.instrument.write(f"#1 VCN {vcn:.3f}")   # then drive
         logger.info("PK4-80M set voltage: %.3f V → VCN %.3f%%", volts, vcn)
         return True
     def output_off(self, retries: int = 2) -> bool:
@@ -277,17 +287,35 @@ class PK480M:
             ("#1 SW0", "output off"),
         )
         sw0_sent = False
-        for cmd, what in steps:
-            for attempt in range(1, retries + 1):
-                try:
-                    self.instrument.write(cmd)
-                    if cmd == "#1 SW0":
-                        sw0_sent = True
-                    break
-                except Exception as exc:
-                    logger.error("PK4-80M %s (%s) failed, attempt %d/%d: %s",
-                                 cmd, what, attempt, retries, exc)
-                    time.sleep(0.2)
+        inst = self.instrument
+        # One instrument hold for the whole sequence, so a heater setpoint from
+        # another thread cannot land between VCN 0 and SW0. If the hold cannot
+        # be taken (another thread stuck on the supply), send anyway — getting
+        # SW0 out matters more than ordering.
+        try:
+            hold = _txn(inst)
+            hold.__enter__()
+        except Exception as exc:
+            logger.error("PK4-80M: could not take the instrument lock for "
+                         "output-off (%s) — sending without it", exc)
+            hold = None
+        target = inst if hold is not None else getattr(inst, "raw", inst)
+        try:
+            for cmd, what in steps:
+                for attempt in range(1, retries + 1):
+                    try:
+                        # This loop is the retry; no extra retry per write.
+                        write_once(target, cmd)
+                        if cmd == "#1 SW0":
+                            sw0_sent = True
+                        break
+                    except Exception as exc:
+                        logger.error("PK4-80M %s (%s) failed, attempt %d/%d: %s",
+                                     cmd, what, attempt, retries, exc)
+                        time.sleep(0.2)
+        finally:
+            if hold is not None:
+                hold.__exit__(None, None, None)
         if sw0_sent:
             logger.info("PK4-80M output off")
         else:
@@ -354,8 +382,8 @@ class Keithley2700:
         
         try:
             if rm is None:
-                rm = pyvisa.ResourceManager()
-            self.instrument = rm.open_resource(self.resource_name)
+                rm = resource_manager()
+            self.instrument = guard(rm.open_resource(self.resource_name), "Keithley 2700")
             self.instrument.timeout = 20000
             self.connected = True
             logger.info(f"Connected to Keithley 2700 at {self.resource_name}")
@@ -386,6 +414,10 @@ class Keithley2700:
     def configure_measurement(self, channel: int = 101, nplc: float = 1.0):
         if not self.connected:
             return False
+        with _txn(self.instrument):
+            return self._configure_measurement(channel, nplc)
+
+    def _configure_measurement(self, channel: int, nplc: float):
         self.instrument.write("*RST")
         time.sleep(0.1)
         self.instrument.write(f":ROUT:CLOS (@{channel})")
@@ -416,9 +448,10 @@ class Keithley2700:
         try:
             if not self.connected:
                 return None
-            self.instrument.write(f":ROUT:CLOS (@{channel})")
-            time.sleep(0.05)  # reduced from 0.1 s to improve V–T correspondence (staggered acquisition error)
-            response = self.instrument.query(":READ?")
+            with _txn(self.instrument):   # close-then-read must not be split
+                self.instrument.write(f":ROUT:CLOS (@{channel})")
+                time.sleep(0.05)  # reduced from 0.1 s to improve V–T correspondence (staggered acquisition error)
+                response = self.instrument.query(":READ?")
             value_str = response.split(',')[0].split('_')[0].strip()
             value = float(value_str)
             self.measurement_data.append({
@@ -444,10 +477,11 @@ class Keithley2700:
         try:
             if not self.connected:
                 return None
-            self.instrument.write(f":SENS:FUNC 'VOLT:DC',(@{channel})")
-            self.instrument.write(f":ROUT:CLOS (@{channel})")
-            time.sleep(0.05)
-            response = self.instrument.query(":READ?")
+            with _txn(self.instrument):
+                self.instrument.write(f":SENS:FUNC 'VOLT:DC',(@{channel})")
+                self.instrument.write(f":ROUT:CLOS (@{channel})")
+                time.sleep(0.05)
+                response = self.instrument.query(":READ?")
             value = float(response.split(',')[0].split('_')[0].strip())
             return value
         except Exception as e:
@@ -500,8 +534,8 @@ class Keithley6221:
                 pass
         try:
             if rm is None:
-                rm = pyvisa.ResourceManager()
-            self.instrument = rm.open_resource(self.resource_name)
+                rm = resource_manager()
+            self.instrument = guard(rm.open_resource(self.resource_name), "Keithley 6221")
             self.instrument.timeout = 20000
             self.connected = True
             logger.info(f"Connected to Keithley 6221 at {self.resource_name}")
@@ -621,9 +655,10 @@ class Keithley6221:
         if not self.connected:
             return None
         try:
-            self.instrument.write(":INIT")
-            time.sleep(0.1)
-            response = self.instrument.query(":FETCH?")
+            with _txn(self.instrument):
+                self.instrument.write(":INIT")
+                time.sleep(0.1)
+                response = self.instrument.query(":FETCH?")
             values = response.strip().split(',')
             if len(values) >= 2:
                 try:
@@ -687,8 +722,8 @@ class Keithley2401:
                 pass
         try:
             if rm is None:
-                rm = pyvisa.ResourceManager()
-            self.instrument = rm.open_resource(self.resource_name)
+                rm = resource_manager()
+            self.instrument = guard(rm.open_resource(self.resource_name), "Keithley 2401")
             self.instrument.timeout = 20000
             self.connected = True
             logger.info(f"Connected to Keithley 2401 at {self.resource_name}")
@@ -731,6 +766,13 @@ class Keithley2401:
             return False
         m = "voltage" if str(source_mode).lower().startswith("v") else "current"
         self._source_mode = m
+        with _txn(self.instrument):
+            self._configure(m, compliance, nplc, four_wire)
+        logger.info("Configured 2401: source %s, compliance %s, NPLC %s, %s",
+                    m, compliance, nplc, "4-wire" if four_wire else "2-wire")
+        return True
+
+    def _configure(self, m: str, compliance: float, nplc: float, four_wire: bool):
         w = self.instrument.write
         w("*RST"); time.sleep(0.2)
         w(":SYST:RSEN ON" if four_wire else ":SYST:RSEN OFF")
@@ -753,9 +795,6 @@ class Keithley2401:
             w(":SENS:CURR:RANG:AUTO ON")
             w(f":SENS:CURR:NPLC {nplc}")
         w(":FORM:ELEM VOLT,CURR")
-        logger.info("Configured 2401: source %s, compliance %s, NPLC %s, %s",
-                    m, compliance, nplc, "4-wire" if four_wire else "2-wire")
-        return True
 
     def set_level(self, level: float):
         if not self.connected:
@@ -860,7 +899,7 @@ class SeebeckSystem:
                 pass
             self.rm = None
         try:
-            self.rm = pyvisa.ResourceManager()
+            self.rm = resource_manager()
         except Exception as e:
             logger.error(f"Failed to create VISA ResourceManager: {e}")
             self.connected = False
