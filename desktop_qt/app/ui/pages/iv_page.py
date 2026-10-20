@@ -25,6 +25,7 @@ from PyQt6.QtWidgets import (
 from .. import theme as T
 from ..widgets.tile import icon_button
 from ..widgets.ui_kit import (
+    ohmic_label,
     LegendStrip, Panel, Readout, ReadoutGrid, Segmented, button, cell, field, fmt_sci,
     label, make_table, page_scaffold, pen, set_props, style_plot,
 )
@@ -255,10 +256,10 @@ class IVPage(QWidget):
         self.ro_sigma = Readout("Conductivity σ", "S/cm")
         self.ro_R2 = Readout("Linearity R²", "")
         self.ro_ohmic = Readout("Ohmic check", "", size="sm")
-        self.ro_cf = Readout("4PP correction CF", "",
-                             tooltip="Smits 4-point-probe geometric correction factor.\n"
-                                     "CF = (π/ln2)·C_size → 4.532 for an infinite sheet, "
-                                     "less for a finite one.")
+        self._cf_tooltip = ("Smits 4-point-probe geometric correction factor.\n"
+                            "CF = (π/ln2)·C_size → 4.532 for an infinite sheet, "
+                            "less for a finite one.")
+        self.ro_cf = Readout("4PP correction CF", "", tooltip=self._cf_tooltip)
         self.ro_T = Readout("Sample temperature", "°C")
         self.ro_n = Readout("Points", "")
         self.readouts = ReadoutGrid([self.ro_R, self.ro_rho, self.ro_sigma, self.ro_R2,
@@ -547,32 +548,21 @@ class IVPage(QWidget):
         rho = None
         sigma = None
         cf = None                                              # 4-point-probe correction factor
+        notes = []
         if self._results and R is not None:
-            idx = self.cb_geometry.currentIndex()
-            t_cm = self.sb_thickness_cm.value() if self.sb_thickness_cm.value() > 1e-9 else None
-            if idx == 1:                                       # van der Pauw
-                if t_cm:
-                    rho = (math.pi * t_cm / math.log(2)) * R
-            elif idx == 2:                                     # in-line 4-point probe
-                s_cm = self.sb_spacing_cm.value() if self.sb_spacing_cm.value() > 1e-9 else None
-                l_cm = self.sb_length_cm.value() if self.sb_length_cm.value() > 1e-9 else None
-                w_cm = self.sb_width_cm.value() if self.sb_width_cm.value() > 1e-9 else None
-                if t_cm:
-                    from ...services.measurement_service import collinear_4pp_size_factor
-                    c_size = collinear_4pp_size_factor(s_cm, l_cm, w_cm)
-                    cf = (math.pi / math.log(2)) * c_size      # Smits CF (chart value)
-                    rho = (math.pi / math.log(2)) * t_cm * R   # thin, infinite sheet
-                    if s_cm:                                   # smooth thickness factor
-                        ts = t_cm / s_cm
-                        denom = math.log(math.sinh(ts) / math.sinh(ts / 2.0))
-                        if denom > 0:
-                            rho *= math.log(2) / denom
-                    rho *= c_size                              # finite-sheet correction
-            else:                                              # rectangular bar
-                l_cm = self.sb_length_cm.value() if self.sb_length_cm.value() > 1e-9 else None
-                w_cm = self.sb_width_cm.value() if self.sb_width_cm.value() > 1e-9 else None
-                if l_cm and w_cm and t_cm and l_cm > 0:
-                    rho = R * (w_cm * t_cm) / l_cm
+            from ...services.measurement_service import resistivity_model
+
+            def _dim(sb):
+                return sb.value() if sb.value() > 1e-9 else None
+            geometry = {1: "vdp", 2: "4pp"}.get(self.cb_geometry.currentIndex(), "bar")
+            model = resistivity_model(geometry, _dim(self.sb_length_cm), _dim(self.sb_width_cm),
+                                      _dim(self.sb_thickness_cm), _dim(self.sb_spacing_cm))
+            notes = model["notes"]
+            if model["rho_per_ohm"]:
+                rho = R * model["rho_per_ohm"]
+            if geometry == "4pp" and model["rho_per_ohm"]:
+                c_size = model["size_factor"]
+                cf = (math.pi / math.log(2)) * c_size if c_size else None   # Smits CF
             sigma = (1.0 / rho) if rho else None
         self._iv_cf = cf
 
@@ -580,17 +570,22 @@ class IVPage(QWidget):
         self.ro_rho.set_value(fmt_sci(rho, 3) if rho is not None else "—")
         self.ro_sigma.set_value(fmt_sci(sigma, 3) if sigma is not None else "—")
         self.ro_cf.set_value(f"{cf:.3f}" if cf is not None else "—")
+        # CALC-1: say when a correction was not applied instead of a silent fallback.
+        size_note = next((n for n in notes if n.startswith("Finite-size")), "")
+        self.ro_cf.set_note("not applied" if size_note else "")
+        self.ro_cf.set_tone("warning" if size_note else None)
+        self.ro_cf.setToolTip(size_note or self._cf_tooltip)
+        self.ro_rho.set_note("see note" if notes else "")
+        self.ro_rho.set_tone("warning" if notes else None)
+        self.ro_rho.setToolTip("\n".join(notes) if notes else "")
         self.ro_R2.set_value(f"{R2:.4f}" if R2 is not None else "—")
         self.ro_T.set_value(f"{Tc:.1f}" if Tc is not None else "—")
         self.ro_n.set_value(str(len(self._results)) if self._results else "—")
 
-        text, tone = {
-            "ohmic":          ("Ohmic", "success"),
-            "check_contacts": ("Check contacts", "warning"),
-            "non_ohmic":      ("Non-ohmic", "danger"),
-        }.get(status, ("—", None))
+        text, tone, why = ohmic_label(status)
         self.ro_ohmic.set_value(text)
         self.ro_ohmic.set_tone(tone)
+        self.ro_ohmic.setToolTip(why)
         self.ro_R2.set_tone(tone if tone in ("warning", "danger") else None)
 
     def _fill_table(self):

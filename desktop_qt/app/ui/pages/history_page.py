@@ -25,6 +25,7 @@ from .. import theme as T
 from ..icons import icon as _icon
 from ..widgets.plot_data import fast_time_curve
 from ..widgets.ui_kit import (
+    Callout, bin_n_text, ohmic_label,
     Chip, EmptyState, KeyValueList, LegendStrip, Panel, STATUS_CHIP, Segmented, button,
     cell, chip_cell, fmt_sci, label, make_table, page_scaffold, pen, set_props, style_plot,
 )
@@ -87,6 +88,22 @@ def _si(value, unit: str) -> str:
     return f"{value:.3g} {unit}"
 
 
+def _rho_notes(params: Dict) -> List[str]:
+    """Corrections that were not applied to this I-V run's resistivity."""
+    stored = params.get("resistivity_model")
+    if isinstance(stored, dict):
+        return list(stored.get("notes") or [])
+    if not params.get("geometry"):
+        return []
+    from ...services.measurement_service import resistivity_model
+    try:
+        return resistivity_model(params.get("geometry"), params.get("length"),
+                                 params.get("width"), params.get("thickness"),
+                                 params.get("spacing"))["notes"]
+    except Exception:
+        return []
+
+
 def _summarise(m, data: List[Dict]) -> Dict:
     """Points, key result and quality flag for one run."""
     out = {"points": len(data), "result": "—", "quality": ("—", "neutral", "")}
@@ -96,16 +113,16 @@ def _summarise(m, data: List[Dict]) -> Dict:
         out["quality"] = ("No data", "warning", "No readings were stored for this run.")
         return out
     if m.type == "iv":
-        from ...services.measurement_service import _linear_fit_resistance, _ohmic_status
+        from ...services.measurement_service import (
+            _linear_fit_resistance, _ohmic_status, _valid_iv_count)
         R, R2 = _linear_fit_resistance(data)
-        out.update(R=R, R2=R2, ohmic=_ohmic_status(R2))
+        out.update(R=R, R2=R2, ohmic=_ohmic_status(R2, _valid_iv_count(data)))
         out["result"] = f"R = {_si(R, 'Ω')}" if R is not None else "—"
-        q = {"ohmic": ("Ohmic", "success", ""),
-             "check_contacts": ("Check contacts", "warning", "0.99 ≤ R² < 0.999"),
-             "non_ohmic": ("Non-ohmic", "danger", "R² < 0.99")}.get(
-            out["ohmic"], ("No fit", "neutral", "Not enough valid points for a fit."))
-        if R2 is not None:
-            q = (q[0], q[1], f"R² = {R2:.4f}" + (f" · {q[2]}" if q[2] else ""))
+        q = ohmic_label(out["ohmic"])
+        if q[1] is None:
+            q = ("No fit", "neutral", "Not enough valid points for a fit.")
+        elif R2 is not None:
+            q = (q[0], q[1], f"R² = {R2:.4f} · {q[2]}")
         out["quality"] = q
     elif m.type == "seebeck":
         from ...instruments.seebeck_analysis import binned_seebeck_analysis
@@ -122,6 +139,10 @@ def _summarise(m, data: List[Dict]) -> Dict:
         else:
             out["quality"] = ("No S fit", "warning",
                               "Too few valid points per T₀ bin for a linear fit.")
+        from ...instruments.seebeck_analysis import polarity_check
+        polarity = polarity_check(data)
+        if polarity:
+            out["quality"] = ("Check polarity", "warning", polarity)
     if invalid:
         out["quality"] = (f"{invalid} invalid", "warning",
                           f"{invalid} reading(s) flagged invalid (not used as data).")
@@ -440,8 +461,11 @@ class HistoryPage(QWidget):
             kv.set("Resistance R", _si(run.get("R"), "Ω"))
             r2 = run.get("R2")
             kv.set("Linearity R²", f"{r2:.4f}" if r2 is not None else "—",
-                   tone={"ohmic": "success", "check_contacts": "warning",
-                         "non_ohmic": "danger"}.get(run.get("ohmic")))
+                   tone=ohmic_label(run.get("ohmic"))[1])
+            notes = _rho_notes(params)
+            if notes:
+                kv.set("ρ corrections", "Not all applied", tone="warning",
+                       tooltip="\n".join(notes))
             geo = params.get("geometry")
             if geo:
                 dims = [f"{params[k]:g}" for k in ("length", "width", "thickness") if params.get(k)]
@@ -732,7 +756,8 @@ class RunDetailWindow(QWidget):
                 tb.setItem(i, 1, cell(f"{b['T0_min_K']:.0f}–{b['T0_max_K']:.0f}", align="right"))
                 tb.setItem(i, 2, cell(f"{b['S_uV_per_K']:.2f}", align="right", bold=True))
                 tb.setItem(i, 3, cell("—" if unc is None else f"{unc:.2f}", align="right"))
-                tb.setItem(i, 4, cell(str(b["n_points"]), align="right"))
+                n_text, n_tip = bin_n_text(b)
+                tb.setItem(i, 4, cell(n_text, align="right", tooltip=n_tip))
             tb.setMinimumHeight(min(60 + 26 * len(bins), 260))
             pb.body.addWidget(tb)
             self._body.addWidget(pb)
@@ -805,8 +830,9 @@ class RunDetailWindow(QWidget):
         from ...services.measurement_service import _linear_fit_resistance, _ohmic_status
         from ..widgets.ui_kit import Readout, ReadoutGrid
         data = self._data
+        from ...services.measurement_service import _valid_iv_count
         fit_R, fit_R2 = _linear_fit_resistance(data)
-        ohmic = _ohmic_status(fit_R2)
+        ohmic = _ohmic_status(fit_R2, _valid_iv_count(data))
         n_fwd = int(self._params.get("points") or 0)
         bidir = bool(self._params.get("bidirectional"))
 
@@ -814,14 +840,17 @@ class RunDetailWindow(QWidget):
         r1.set_value(_si(fit_R, "Ω"))
         r2 = Readout("Linearity R²", "")
         r2.set_value(f"{fit_R2:.4f}" if fit_R2 is not None else "—")
-        text, tone = {"ohmic": ("Ohmic", "success"), "check_contacts": ("Check contacts", "warning"),
-                      "non_ohmic": ("Non-ohmic", "danger")}.get(ohmic, ("—", None))
-        r3 = Readout("Ohmic check", "", size="sm")
+        text, tone, why = ohmic_label(ohmic)
+        r3 = Readout("Ohmic check", "", size="sm", tooltip=why)
         r3.set_value(text)
         r3.set_tone(tone)
         r4 = Readout("Points", "")
         r4.set_value(str(len(data)))
         self._body.addWidget(ReadoutGrid([r1, r2, r3, r4], 4))
+        notes = _rho_notes(self._params)
+        if notes:
+            self._body.addWidget(Callout("\n".join(notes), "warning",
+                                         title="Resistivity: not all corrections applied"))
 
         headers = ["Current (A)", "Voltage (V)", "Resistance (Ω)", "Power (mW)",
                    "Resistivity (Ω·cm)", "Conductivity (S/cm)"]

@@ -170,7 +170,25 @@ def _linear_fit_resistance(points: List[Dict]) -> tuple:
     return R, R_squared
 
 
-def _ohmic_status(R_squared: Optional[float]) -> str:
+#: Below this many valid points R² is trivially high, so no ohmic verdict
+#: is given (CALC-4).
+MIN_OHMIC_POINTS = 5
+
+
+def _valid_iv_count(points: List[Dict]) -> int:
+    return sum(1 for p in points
+               if p.get("current") is not None and p.get("voltage") is not None
+               and abs(p["current"]) > 1e-12)
+
+
+def _ohmic_status(R_squared: Optional[float], n_points: Optional[int] = None) -> str:
+    """"ohmic" · "check_contacts" · "non_ohmic" · "too_few_points" · "unknown".
+
+    ``n_points`` is the number of valid (I, V) points behind the fit; with
+    fewer than MIN_OHMIC_POINTS the linearity can't be judged.
+    """
+    if n_points is not None and n_points < MIN_OHMIC_POINTS:
+        return "too_few_points"
     if R_squared is None:
         return "unknown"
     if R_squared >= 0.999:
@@ -331,6 +349,8 @@ def run_iv_sweep(
         identify = getattr(system, "identify", None)
         run_context = build_run_context(identify() if callable(identify) else {})
 
+        rho_model = resistivity_model(geometry, length, width, thickness, spacing)
+
         # Optional: configure 2700 for temperature and read once at start
         try:
             if system.k2700.connected:
@@ -373,6 +393,7 @@ def run_iv_sweep(
                         "width": width,
                         "thickness": thickness,
                         "temperature_C": temperature_C,
+                        "resistivity_model": rho_model,
                         "run_context": run_context,
                     }, default=str),
                     started_at=datetime.utcnow(),
@@ -413,11 +434,8 @@ def run_iv_sweep(
         )
         system.k2401.output_on()
         delay_s = delay_ms / 1000.0
-        # Finite-sheet geometric correction for the in-line 4-point probe
-        # (computed once; depends only on geometry, not on the data points).
-        size_factor = 1.0
-        if geometry == "4pp":
-            size_factor = collinear_4pp_size_factor(spacing, length, width)
+        # ρ = k·R for this sample (computed once; it depends only on the
+        # geometry). Corrections that could not be applied are listed in it.
         t_start = time.monotonic()
         for idx, level in enumerate(sequence):
             if _aborted():
@@ -433,7 +451,7 @@ def run_iv_sweep(
                 i = meas["current"]
                 r = (v / i) if (i and abs(i) > 1e-12) else None
                 pt = {"voltage": v, "current": i, "resistance": r}
-            _enrich_point(pt, length, width, thickness, geometry, spacing, size_factor)
+            _enrich_point(pt, length, width, thickness, geometry, spacing, model=rho_model)
             results.append(pt)
             # Persist every point immediately.
             if db is not None and measurement_obj is not None:
@@ -517,18 +535,102 @@ def run_iv_sweep(
 
     # Fit and ohmic status
     fit_R, fit_R_squared = _linear_fit_resistance(results)
-    ohmic = _ohmic_status(fit_R_squared)
+    n_valid = _valid_iv_count(results)
+    ohmic = _ohmic_status(fit_R_squared, n_valid)
 
     return {
         "points": results,
         "fit_R": fit_R,
         "fit_R_squared": fit_R_squared,
         "ohmic_status": ohmic,
+        "n_valid": n_valid,
+        "resistivity_model": rho_model,
         "temperature_C": temperature_C,
         "measurement_id": measurement_id,
         "aborted": outcome == "stopped",
         "db_warning": db_warning,
     }
+
+
+def fourpp_size_correction(s, length, width) -> tuple:
+    """(factor, note). ``note`` is None when the finite-sheet correction was
+    applied, else the reason it was not (factor is then 1.0)."""
+    if not s or s <= 0:
+        return 1.0, "probe spacing s is not set"
+    if not (length and width) or length <= 0 or width <= 0:
+        return 1.0, "sample length/width are not set"
+    if length <= 3.0 * s:
+        return 1.0, (f"the probe array (3·s = {3 * s:g} cm) does not fit in the sample "
+                     f"length ({length:g} cm)")
+    c = collinear_4pp_size_factor(s, length, width)
+    if c == 1.0:
+        return 1.0, "the image-sum correction could not be computed"
+    return c, None
+
+
+def resistivity_model(geometry: str, length: Optional[float], width: Optional[float],
+                      thickness: Optional[float], spacing: Optional[float] = None,
+                      size_factor: Optional[float] = None) -> Dict:
+    """How resistivity follows from resistance for this sample: ρ = k · R.
+
+    Returns {"geometry", "rho_per_ohm" (k in Ω·cm per Ω, None if ρ can't be
+    computed), "size_factor", "thickness_factor", "notes"}. ``notes`` lists
+    every correction that could NOT be applied and why, so a fallback value is
+    never mistaken for a corrected one (CALC-1). Dimensions in cm. Pass a
+    precomputed ``size_factor`` to skip the 4PP image sum.
+    """
+    import math
+    geometry = geometry if geometry in ("bar", "vdp", "4pp") else "bar"
+    out = {"geometry": geometry, "rho_per_ohm": None, "size_factor": None,
+           "thickness_factor": None, "notes": []}
+    notes = out["notes"]
+
+    def pos(v):
+        return v is not None and v > 0
+
+    if geometry == "vdp":
+        if not pos(thickness):
+            notes.append("Resistivity not computed: van der Pauw needs the thickness.")
+            return out
+        out["rho_per_ohm"] = math.pi * thickness / math.log(2)
+    elif geometry == "4pp":
+        if not pos(thickness):
+            notes.append("Resistivity not computed: the 4-point probe needs the thickness.")
+            return out
+        k = (math.pi / math.log(2)) * thickness                 # thin, infinite sheet
+        f_t = None
+        if pos(spacing):
+            ts = thickness / spacing
+            denom = math.log(math.sinh(ts) / math.sinh(ts / 2.0))
+            if denom > 0:
+                f_t = math.log(2) / denom                         # →1 thin, →bulk for large t/s
+        if f_t is None:
+            notes.append("Thickness correction F(t/s) NOT applied: "
+                         + ("probe spacing s is not set." if not pos(spacing)
+                            else "it could not be computed."))
+        else:
+            k *= f_t
+        out["thickness_factor"] = f_t
+        if size_factor is not None:
+            c, why = size_factor, None
+        else:
+            c, why = fourpp_size_correction(spacing, length, width)
+        if why:
+            notes.append(f"Finite-size correction NOT applied ({why}): "
+                         "ρ is the infinite-sheet value.")
+        else:
+            out["size_factor"] = c
+            k *= c
+        out["rho_per_ohm"] = k
+    else:
+        missing = [n for n, v in (("length", length), ("width", width),
+                                  ("thickness", thickness)) if not pos(v)]
+        if missing:
+            notes.append("Resistivity not computed: the bar geometry needs "
+                         + ", ".join(missing) + " > 0.")
+            return out
+        out["rho_per_ohm"] = width * thickness / length
+    return out
 
 
 def collinear_4pp_size_factor(s, length, width, n_terms: int = 60) -> float:
@@ -580,7 +682,8 @@ def _enrich_point(
     thickness: Optional[float],
     geometry: str = "bar",
     spacing: Optional[float] = None,
-    size_factor: float = 1.0,
+    size_factor: Optional[float] = 1.0,
+    model: Optional[Dict] = None,
 ) -> None:
     """Add resistivity (Ω·cm) and conductivity (S/cm). Dimensions are in cm.
 
@@ -592,31 +695,18 @@ def _enrich_point(
                     ρ = (π/ln 2)·t·R · F_t · size_factor, where F_t is a smooth
                     thickness factor (bridges thin↔bulk via t/s) and size_factor
                     is the finite-sheet geometric correction (collinear_4pp_size_factor).
+
+    ``model`` (from resistivity_model) avoids recomputing the geometry per point.
     """
-    import math
+    if model is None:
+        model = resistivity_model(geometry, length, width, thickness, spacing,
+                                  size_factor=size_factor)
     r = pt.get("resistance")
     pt.setdefault("resistivity", None)
     pt.setdefault("conductivity", None)
     if r is None or r <= 0:
         return
-    rho = None
-    if geometry == "vdp":
-        if thickness and thickness > 0:
-            rho = (math.pi * thickness / math.log(2)) * r
-    elif geometry == "4pp":
-        if thickness and thickness > 0:
-            base = (math.pi / math.log(2)) * thickness * r       # thin, infinite sheet
-            f_t = 1.0
-            if spacing and spacing > 0:                          # smooth thickness factor
-                ts = thickness / spacing
-                denom = math.log(math.sinh(ts) / math.sinh(ts / 2.0))
-                if denom > 0:
-                    f_t = math.log(2) / denom                    # →1 thin, →bulk for large t/s
-            rho = base * f_t * (size_factor or 1.0)              # × finite-sheet correction
-    else:  # rectangular bar
-        if length and width and thickness and length > 0:
-            area = width * thickness
-            if area > 0:
-                rho = r * area / length
+    k = model.get("rho_per_ohm")
+    rho = r * k if k else None
     pt["resistivity"] = rho
     pt["conductivity"] = (1.0 / rho) if rho else None

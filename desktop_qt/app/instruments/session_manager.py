@@ -9,7 +9,7 @@ from typing import Any, Dict, List, Optional
 
 from .instrument import SeebeckSystem
 from .safety import SafetyMonitor
-from .seebeck_analysis import binned_seebeck_analysis
+from .seebeck_analysis import binned_seebeck_analysis, polarity_verdict, polarity_vote
 from ..core import audit
 from ..core.config import get_config
 from ..core.run_context import build_run_context
@@ -55,6 +55,8 @@ class MeasurementSessionManager:
         self.end_reason: Optional[str] = None      # why the run ended (abort/error text)
         self.db_warning: Optional[str] = None      # set when the run is NOT being saved
         self.invalid_reads = 0                     # rows with an invalid thermocouple
+        self._polarity_votes = [0, 0]              # [wrong sign, right sign]
+        self.polarity_warning: Optional[str] = None  # hot/cold TCs look swapped
         self._run_context: Optional[Dict[str, Any]] = None
         _managers.add(self)
 
@@ -75,6 +77,8 @@ class MeasurementSessionManager:
         self.end_reason = None
         self.db_warning = None
         self.invalid_reads = 0
+        self.polarity_warning = None
+        self._polarity_votes = [0, 0]              # [wrong sign, right sign]
         self.session_data = []
         self.session_status = "running"
         self.session_params = params
@@ -180,6 +184,7 @@ class MeasurementSessionManager:
             "end_reason": self.end_reason,
             "db_warning": self.db_warning,
             "invalid_reads": self.invalid_reads,
+            "polarity_warning": self.polarity_warning,
             "measurement_id": self._db_measurement_id,
         }
         if self.session_total_steps and self.session_params:
@@ -435,11 +440,18 @@ class MeasurementSessionManager:
                     # yields no ΔT, T₀ or S for this row.
                     delta_t = t0_c = t0_k = None
                 # Seebeck S = ΔV/ΔT in µV/K; ΔV in mV, ΔT in °C (= K for difference). Guard small ΔT.
+                # When S is not computed, the row says why (CALC-1).
                 delta_t_threshold = 0.01
-                if temf_mv is not None and delta_t is not None and abs(delta_t) >= delta_t_threshold:
-                    s_uv_per_k = (temf_mv * 1000.0) / delta_t  # mV -> µV, °C = K
+                s_uv_per_k = None
+                if delta_t is None:
+                    s_note = "invalid thermocouple reading"
+                elif temf_mv is None:
+                    s_note = "no TEMF reading"
+                elif abs(delta_t) < delta_t_threshold:
+                    s_note = f"|ΔT| below {delta_t_threshold:g} K"
                 else:
-                    s_uv_per_k = None
+                    s_uv_per_k = (temf_mv * 1000.0) / delta_t  # mV -> µV, °C = K
+                    s_note = None
                 # ΔT/T₀: differential method assumes small gradient; warn if large
                 delta_t_over_t0 = (abs(delta_t) / t0_k) if (delta_t is not None and t0_k) else None
                 branch = "cooling" if phase in ("ramp_down", "cooling_tail") else "heating"
@@ -455,6 +467,7 @@ class MeasurementSessionManager:
                     "T0 [K]": t0_k,
                     "delta_T_over_T0": round(delta_t_over_t0, 6) if delta_t_over_t0 is not None else None,
                     "S [µV/K]": s_uv_per_k,
+                    "S_note": s_note,
                     "Heater V [V]": round(heater_v, 4) if heater_v is not None else None,
                     "Heater I [A]": round(heater_i, 4) if heater_i is not None else None,
                     "branch": branch,
@@ -464,6 +477,12 @@ class MeasurementSessionManager:
                 with self.lock:
                     self.session_data.append(row)
                     seq = len(self.session_data)
+                vote = polarity_vote(row)
+                if vote and self.polarity_warning is None:
+                    self._polarity_votes[0 if vote > 0 else 1] += 1
+                    self.polarity_warning = polarity_verdict(*self._polarity_votes)
+                    if self.polarity_warning:
+                        logger.warning("Polarity check: %s", self.polarity_warning)
 
                 # Persist every point immediately — a crash loses at most the
                 # point in flight (cheap at ~1 point per second).
@@ -559,6 +578,7 @@ class MeasurementSessionManager:
                     reason=self.end_reason,
                     details={"type": "seebeck", "outcome": outcome, "points": n_points,
                              "invalid_reads": self.invalid_reads,
+                             "polarity_warning": self.polarity_warning,
                              "db_warning": self.db_warning})
 
     def _finalise_db(self, db, measurement_obj: Measurement, outcome: str) -> None:

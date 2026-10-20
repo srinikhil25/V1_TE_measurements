@@ -32,6 +32,7 @@ from ..widgets.plot_data import ColumnBuffer, fast_time_curve, thin
 from ..widgets.profile_preview import ProfilePreview, fmt_duration, profile_duration_s
 from ..widgets.tile import Tile, icon_button
 from ..widgets.ui_kit import (
+    bin_n_text,
     Chip, KeyValueList, LegendStrip, Panel, Readout, ReadoutGrid, Segmented, Stepper,
     button, cell, field, label, make_table, page_scaffold, pen, set_props, style_plot,
 )
@@ -114,6 +115,7 @@ class SeebeckPage(QWidget):
         self._last_phase: Optional[str] = None
         self._last_invalid = 0
         self._last_db_warning = None
+        self._polarity_logged = False
         self._run_id = None
         self._auto_hid_side = False
 
@@ -249,7 +251,9 @@ class SeebeckPage(QWidget):
         self.ro = {
             "t1":   Readout("T₁ hot side", "°C"),
             "t2":   Readout("T₂ cold side", "°C"),
-            "dt":   Readout("ΔT", "K"),
+            "dt":   Readout("ΔT", "K",
+                            tooltip="ΔT = T₂ − T₁ (cold − hot): negative while heating. "
+                                    "S = TEMF / ΔT."),
             "t0":   Readout("T₀ mean", "K"),
             "temf": Readout("TEMF", "mV"),
             "s":    Readout("S (point)", "µV/K", tone="accent",
@@ -695,6 +699,7 @@ class SeebeckPage(QWidget):
         self._last_phase = None
         self._last_invalid = 0
         self._last_db_warning = None
+        self._polarity_logged = False
         self._run_id = None
         self._show_running_buttons()
         self._set_mode_enabled(False)
@@ -755,6 +760,9 @@ class SeebeckPage(QWidget):
             self._log(f"{invalid} invalid thermocouple reading(s) so far — not used as data.",
                       "warning")
             self._last_invalid = invalid
+        if status.get("polarity_warning") and not self._polarity_logged:
+            self._polarity_logged = True
+            self._log(status["polarity_warning"], "danger")
         if status.get("db_warning") and status["db_warning"] != self._last_db_warning:
             self._last_db_warning = status["db_warning"]
             self._log("NOT SAVED: " + str(status["db_warning"]), "danger")
@@ -856,8 +864,9 @@ class SeebeckPage(QWidget):
             t.setItem(i, 1, cell(f"{b.get('S_uV_per_K', 0):.2f}", align="right", mono=True, bold=True))
             t.setItem(i, 2, cell("—" if unc is None else f"{unc:.2f}", align="right", mono=True,
                                  color=T.TEXT_SECONDARY))
-            t.setItem(i, 3, cell(str(b.get("n_points", "")), align="right", mono=True,
-                                 color=T.TEXT_SECONDARY))
+            n_text, n_tip = bin_n_text(b)
+            t.setItem(i, 3, cell(n_text, align="right", mono=True, tooltip=n_tip,
+                                 color=T.WARNING if b.get("n_rejected") else T.TEXT_SECONDARY))
             if b.get("S_uV_per_K") is not None:
                 xs.append(b["T0_center_K"])
                 ys.append(b["S_uV_per_K"])
@@ -922,9 +931,11 @@ class SeebeckPage(QWidget):
                 for j, (key, _, fmt) in enumerate(_TABLE_COLS):
                     val = row.get(key)
                     text = "—" if val is None else fmt.format(val)
+                    tip = (row.get("flag") or "invalid reading") if invalid else ""
+                    if key == "S [µV/K]" and val is None and row.get("S_note"):
+                        tip = f"S not computed: {row['S_note']}"
                     it = cell(text, align="right",
-                              color=T.WARNING if invalid else None,
-                              tooltip=(row.get("flag") or "invalid reading") if invalid else "")
+                              color=T.WARNING if invalid else None, tooltip=tip)
                     self.tbl_data.setItem(i, j, it)
             self._table_row_count = new_count
             self.tbl_data.scrollToBottom()

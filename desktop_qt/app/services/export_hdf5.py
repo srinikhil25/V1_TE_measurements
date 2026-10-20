@@ -239,20 +239,24 @@ def export_measurement(measurement_id: int, path: str) -> str:
         if is_seebeck:
             from ..instruments.seebeck_analysis import binned_seebeck_analysis
             bins = binned_seebeck_analysis(data, bin_width_k=10.0)
-            _scalar(an, "method", "Linear fit of thermoelectric voltage vs ΔT per 10 K bin of T0")
+            _scalar(an, "method", "Linear fit of thermoelectric voltage vs ΔT per 10 K bin of "
+                                  "T0, rejection of rare (<= 5 %) spikes beyond 5 robust sigma (MAD)")
             if bins:
                 _write_columns(an, bins, {
                     "T0_center_K": ("T0_center", "K"),
                     "S_uV_per_K": ("seebeck_coefficient", "uV/K"),
                     "S_uncertainty_uV_per_K": ("seebeck_uncertainty", "uV/K"),
+                    "n_points": ("n_points_fitted", None),
+                    "n_rejected": ("n_outliers_rejected", None),
                 })
         else:
-            from .measurement_service import _linear_fit_resistance, _ohmic_status
+            from .measurement_service import (_linear_fit_resistance, _ohmic_status,
+                                              _valid_iv_count)
             R, R2 = _linear_fit_resistance(data)
             _scalar(an, "method", "Least-squares fit V = R*I + V0 (offset absorbs thermal EMF)")
             _scalar(an, "fit_resistance", R, "Ohm")
             _scalar(an, "fit_R_squared", R2)
-            _scalar(an, "ohmic_status", _ohmic_status(R2))
+            _scalar(an, "ohmic_status", _ohmic_status(R2, _valid_iv_count(data)))
 
         prov = _group(entry, "provenance", "NXcollection")
         if run_context:

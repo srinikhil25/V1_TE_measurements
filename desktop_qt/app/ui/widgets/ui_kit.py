@@ -368,6 +368,32 @@ class Dot(QWidget):
 
 
 # Status vocabulary shared by the run library, overview and detail views.
+#: I-V ohmic verdict → (label, tone, explanation). Shared by every page.
+OHMIC_LABEL = {
+    "ohmic":          ("Ohmic", "success", "R² ≥ 0.999"),
+    "check_contacts": ("Check contacts", "warning", "0.99 ≤ R² < 0.999"),
+    "non_ohmic":      ("Non-ohmic", "danger", "R² < 0.99"),
+    "too_few_points": ("Too few points", "warning",
+                       "At least 5 valid points are needed to judge linearity."),
+}
+
+
+def ohmic_label(status: Optional[str]):
+    """(label, tone, explanation) for an ohmic status; ("—", None, "") if unknown."""
+    return OHMIC_LABEL.get(status or "", ("—", None, ""))
+
+
+def bin_n_text(b: dict):
+    """(text, tooltip) for a Seebeck bin's point count, showing rejected outliers."""
+    n, k = b.get("n_points", ""), b.get("n_rejected") or 0
+    if b.get("fit_warning"):
+        return f"{n} ⚠", b["fit_warning"]
+    if not k:
+        return str(n), f"{n} points in the fit"
+    return f"{n} −{k}", (f"{n} points in the fit; {k} spike(s) rejected "
+                        "(residual > 5 robust σ)")
+
+
 STATUS_CHIP = {
     "finished":    ("Finished", "success"),
     "completed":   ("Finished", "success"),
