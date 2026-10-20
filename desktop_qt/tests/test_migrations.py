@@ -3,7 +3,9 @@ import sqlite3
 import pytest
 from sqlalchemy import create_engine, inspect
 
-from app.migrations import HEAD, upgrade_database
+from app.migrations import _REVISIONS, HEAD, upgrade_database
+
+ALL = [m.REVISION for m in _REVISIONS]
 
 
 def _schema(db_path):
@@ -40,7 +42,7 @@ def _version(db_path):
 def test_fresh_database_matches_models(tmp_path):
     migrated = tmp_path / "migrated.db"
     modelled = tmp_path / "models.db"
-    assert upgrade_database(str(migrated)) == ["0001", "0002"]
+    assert upgrade_database(str(migrated)) == ALL
     _create_all(str(modelled))
     assert _schema(str(migrated)) == _schema(str(modelled))
     assert _version(str(migrated)) == HEAD
@@ -86,7 +88,7 @@ def test_legacy_unversioned_database_is_upgraded_without_data_loss(tmp_path):
         c.execute("PRAGMA journal_mode=WAL")
 
     applied = upgrade_database(db)
-    assert applied == ["0001", "0002"]
+    assert applied == ALL
     assert _version(db) == HEAD
 
     with sqlite3.connect(db) as c:

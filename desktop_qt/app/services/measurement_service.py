@@ -285,6 +285,8 @@ def run_iv_sweep(
     outcome = "error"
     end_reason: Optional[str] = None
     system = None
+    started_audited = False
+    from ..core import audit
 
     try:
         SeebeckSystem = _get_seebeck_system()
@@ -302,6 +304,11 @@ def run_iv_sweep(
         if not system.connect_all():
             end_reason = "Failed to connect to instruments."
             raise RuntimeError(end_reason)
+
+        # Settings snapshot (software, host, config, instrument *IDN?).
+        from ..core.run_context import build_run_context
+        identify = getattr(system, "identify", None)
+        run_context = build_run_context(identify() if callable(identify) else {})
 
         # Optional: configure 2700 for temperature and read once at start
         try:
@@ -345,6 +352,7 @@ def run_iv_sweep(
                         "width": width,
                         "thickness": thickness,
                         "temperature_C": temperature_C,
+                        "run_context": run_context,
                     }, default=str),
                     started_at=datetime.utcnow(),
                 )
@@ -360,6 +368,16 @@ def run_iv_sweep(
                     db.close()
                 db = None
                 measurement_obj = None
+
+        audit.record(
+            "run_started", measurement_id=measurement_id, user_id=_user_id,
+            username=operator,
+            details={"type": "iv", "sample_id": sample_id, "source_mode": source_mode,
+                     "start": start, "stop": stop, "points": points,
+                     "current_limit": current_limit, "voltage_limit": voltage_limit,
+                     "four_wire": four_wire, "geometry": geometry,
+                     "saved": measurement_id is not None})
+        started_audited = True
 
         # Single SourceMeter (2401) handles both source modes. Compliance is the
         # limit on the MEASURED quantity: volts when sourcing current, amps when
@@ -468,6 +486,12 @@ def run_iv_sweep(
                 db.rollback()
             finally:
                 db.close()
+        if started_audited:
+            audit.record(
+                "run_ended", measurement_id=measurement_id, user_id=_user_id,
+                username=operator, reason=end_reason,
+                details={"type": "iv", "outcome": outcome, "points": len(results),
+                         "db_warning": db_warning})
         _iv_active.clear()
 
     # Fit and ohmic status

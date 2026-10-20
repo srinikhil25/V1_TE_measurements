@@ -48,18 +48,37 @@ def init_db() -> None:
     its previous revision); the caller must not start the app on a half-known
     schema.
     """
+    from . import audit
+    from .backup import daily_backup
     from ..migrations import upgrade_database
     from ..models import db_models  # noqa: F401 — registers models
 
     applied = upgrade_database(get_db_path())
     if applied:
         logger.info("Database schema migrated: %s", ", ".join(applied))
-    _mark_interrupted_runs()
+        audit.record("db_migrated", details={"revisions": applied}, use_current_user=False)
+    _checkpoint_wal()
+    interrupted = _mark_interrupted_runs()
+    if interrupted:
+        audit.record("runs_interrupted", details={"measurement_ids": interrupted},
+                     use_current_user=False)
+    backup = daily_backup(get_db_path())
+    if backup is not None:
+        audit.record("db_backup", details={"file": backup.name}, use_current_user=False)
     _seed_dev_accounts()
     logger.info("Database ready at %s", get_db_path())
 
 
-def _mark_interrupted_runs() -> None:
+def _checkpoint_wal() -> None:
+    """Fold any leftover write-ahead log (e.g. after a crash) into the main file."""
+    try:
+        with engine.connect() as conn:
+            conn.exec_driver_sql("PRAGMA wal_checkpoint(TRUNCATE)")
+    except Exception as exc:
+        logger.warning("WAL checkpoint failed: %s", exc)
+
+
+def _mark_interrupted_runs() -> list:
     """Runs still 'running' at startup were cut off by a crash or forced exit.
 
     Their rows up to the last saved point are kept; only the status changes so
@@ -79,6 +98,7 @@ def _mark_interrupted_runs() -> None:
             db.commit()
             logger.warning("Marked %d unfinished run(s) as interrupted: %s",
                            len(orphans), [m.id for m in orphans])
+        return [m.id for m in orphans]
     finally:
         db.close()
 

@@ -106,3 +106,23 @@ def test_from_config_uses_safety_section():
     m = SafetyMonitor.from_config(SafetyLimits(max_temperature_C=80.0))
     assert m.max_temperature_C == 80.0
     assert not math.isnan(m.max_rise_rate_C_per_min)
+
+
+def test_stuck_sensor_becomes_invalid_then_aborts():
+    m = monitor(max_identical_reads=5, max_consecutive_invalid_reads=3)
+    results = [m.check(float(t), 25.0, 30.0 + 0.01 * t) for t in range(10)]
+    assert all(r.valid for r in results[:4])
+    assert not results[4].valid and "stuck" in results[4].flag_text
+    assert results[6].abort and "consecutive invalid" in results[6].abort_reason
+
+
+def test_noisy_sensor_is_not_stuck():
+    m = monitor(max_identical_reads=5)
+    for t in range(50):
+        assert m.check(float(t), 25.0 + (0.001 if t % 2 else 0.0), 30.0 + 0.002 * (t % 3)).valid
+
+
+def test_stuck_check_can_be_disabled():
+    m = monitor(max_identical_reads=0)
+    for t in range(100):
+        assert m.check(float(t), 25.0, 30.0).valid

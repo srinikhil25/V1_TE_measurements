@@ -10,7 +10,9 @@ from typing import Any, Dict, List, Optional
 from .instrument import SeebeckSystem
 from .safety import SafetyMonitor
 from .seebeck_analysis import binned_seebeck_analysis
+from ..core import audit
 from ..core.config import get_config
+from ..core.run_context import build_run_context
 from ..core.database import get_session
 from ..models.db_models import Measurement, MeasurementIntegrity, MeasurementRow
 
@@ -53,6 +55,7 @@ class MeasurementSessionManager:
         self.end_reason: Optional[str] = None      # why the run ended (abort/error text)
         self.db_warning: Optional[str] = None      # set when the run is NOT being saved
         self.invalid_reads = 0                     # rows with an invalid thermocouple
+        self._run_context: Optional[Dict[str, Any]] = None
         _managers.add(self)
 
     def start_session(self, params: Dict):
@@ -231,7 +234,8 @@ class MeasurementSessionManager:
                 operator=self.session_metadata.get("operator"),
                 notes=self.session_metadata.get("notes"),
                 params_json=json.dumps(
-                    {k: v for k, v in params.items() if not k.startswith("_")}, default=str),
+                    {**{k: v for k, v in params.items() if not k.startswith("_")},
+                     "run_context": self._run_context}, default=str),
                 started_at=datetime.utcnow(),
             )
             db.add(measurement)
@@ -256,6 +260,8 @@ class MeasurementSessionManager:
         db = None
         measurement_obj: Optional[Measurement] = None
         outcome = STATUS_ERROR
+        self._run_context = None
+        started_audited = False
         try:
             cfg = get_config()
             # Connect to all instruments
@@ -266,6 +272,12 @@ class MeasurementSessionManager:
                 self.session_active = False
                 logger.error("Failed to connect to instruments. Session aborted.")
                 return
+
+            # Settings snapshot: software, host, rig config, instrument *IDN?.
+            # Taken before initialise so no query interleaves with heater control.
+            identify = getattr(self.seebeck_system, "identify", None)
+            instruments = identify() if callable(identify) else {}
+            self._run_context = build_run_context(instruments, cfg)
 
             # Apply per-geometry heater limits (voltage compliance + current cap)
             # and route the relay BEFORE initialise, so compliance is set at
@@ -315,6 +327,16 @@ class MeasurementSessionManager:
 
             # ── Create Measurement row in DB ─────────────────────────────
             db, measurement_obj = self._open_db_record(params)
+            audit.record(
+                "run_started", measurement_id=self._db_measurement_id,
+                user_id=self._db_user_id, username=self.session_metadata.get("operator"),
+                details={"type": "seebeck",
+                         "sample_id": self.session_metadata.get("sample_id"),
+                         "probe_mode": probe_mode,
+                         "params": {k: v for k, v in params.items() if not k.startswith("_")},
+                         "safety": cfg.to_dict()["safety"],
+                         "saved": self._db_measurement_id is not None})
+            started_audited = True
 
             # Segment step counts: pre, ramp-up, hold (plateau), ramp-down. Each step ~interval seconds.
             # hold_time is the plateau duration only (e.g. 200 s at peak I); total run = pre + ramp_up + hold + ramp_down.
@@ -528,6 +550,16 @@ class MeasurementSessionManager:
                     db.close()
                 except Exception:
                     pass
+            if started_audited:
+                with self.lock:
+                    n_points = len(self.session_data)
+                audit.record(
+                    "run_ended", measurement_id=self._db_measurement_id,
+                    user_id=self._db_user_id, username=self.session_metadata.get("operator"),
+                    reason=self.end_reason,
+                    details={"type": "seebeck", "outcome": outcome, "points": n_points,
+                             "invalid_reads": self.invalid_reads,
+                             "db_warning": self.db_warning})
 
     def _finalise_db(self, db, measurement_obj: Measurement, outcome: str) -> None:
         """Record the outcome, end reason and integrity hash of the run."""

@@ -32,11 +32,11 @@ from typing import List, Optional
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.pool import NullPool
 
-from . import r0001_baseline, r0002_measurement_outcome
+from . import r0001_baseline, r0002_measurement_outcome, r0003_audit_trail
 
 logger = logging.getLogger(__name__)
 
-_REVISIONS = [r0001_baseline, r0002_measurement_outcome]
+_REVISIONS = [r0001_baseline, r0002_measurement_outcome, r0003_audit_trail]
 
 HEAD = _REVISIONS[-1].REVISION
 VERSION_TABLE = "alembic_version"

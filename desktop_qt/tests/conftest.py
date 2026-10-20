@@ -52,3 +52,34 @@ def temp_db(tmp_path):
     factory = sessionmaker(bind=engine, autocommit=False, autoflush=False)
     yield db_path, factory
     engine.dispose()
+
+
+@pytest.fixture
+def app_db(temp_db, monkeypatch):
+    """temp_db wired in as the application's database (SessionLocal / get_session)."""
+    from app.core import database
+
+    _path, factory = temp_db
+    monkeypatch.setattr(database, "SessionLocal", factory)
+    monkeypatch.setattr(database, "get_session", factory)
+    return temp_db
+
+
+@pytest.fixture
+def make_user(app_db):
+    from datetime import datetime
+
+    from app.models.db_models import User
+
+    _path, factory = app_db
+
+    def _make(username="u1", role="researcher", lab_id=None):
+        s = factory()
+        u = User(username=username, email=f"{username}@x", password_hash="h", role=role,
+                 lab_id=lab_id, active=True, created_at=datetime.utcnow())
+        s.add(u)
+        s.commit()
+        uid = u.id
+        s.close()
+        return uid
+    return _make

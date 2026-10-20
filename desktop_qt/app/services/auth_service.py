@@ -4,6 +4,7 @@ import logging
 from datetime import datetime
 from typing import Optional
 
+from ..core import audit
 from ..core.database import SessionLocal
 from ..core.security import verify_password
 from ..models.db_models import User
@@ -32,8 +33,12 @@ def authenticate(username: str, password: str) -> Optional[User]:
             db.expunge(user)
             _current_user = user
             logger.info("Login: %s (%s)", user.username, user.role)
+            audit.record("login", user_id=user.id, username=user.username,
+                         details={"role": user.role})
             return user
         logger.warning("Failed login attempt for username: %r", username)
+        audit.record("login_failed", username=username.strip()[:50] or None,
+                     use_current_user=False)
         return None
     finally:
         db.close()
@@ -43,6 +48,7 @@ def logout() -> None:
     global _current_user
     if _current_user:
         logger.info("Logout: %s", _current_user.username)
+        audit.record("logout", user_id=_current_user.id, username=_current_user.username)
     _current_user = None
 
 
@@ -61,6 +67,8 @@ def change_password(user_id: int, old_password: str, new_password: str) -> bool:
             return False
         user.password_hash = hash_password(new_password)
         db.commit()
+        audit.record("password_changed", user_id=user.id, username=user.username,
+                     details={"by": "self"})
         return True
     finally:
         db.close()

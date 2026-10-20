@@ -24,7 +24,7 @@ hiddenimports += collect_submodules("sqlalchemy")   # dialects/drivers
 # Schema migrations (app/migrations) run through alembic.operations, which loads
 # its op implementations / plugins dynamically.
 hiddenimports += collect_submodules("alembic")
-hiddenimports += ["pyOptris", "bcrypt", "pyvisa", "openpyxl", "PIL", "pyqtgraph", "numpy"]
+hiddenimports += ["pyOptris", "bcrypt", "pyvisa", "openpyxl", "PIL", "pyqtgraph", "numpy", "h5py"]
 
 a = Analysis(
     ["main.py"],

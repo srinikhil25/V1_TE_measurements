@@ -14,6 +14,9 @@ Rules (limits come from ``[safety]`` in the rig config):
 * **Invalid-read streak** — ``max_consecutive_invalid_reads`` cycles in a row
   with any invalid thermocouple aborts the run: with a sensor gone, the
   over-temperature check is blind on that side.
+* **Stuck sensor** — ``max_identical_reads`` bit-identical readings in a row on
+  one channel make that channel invalid (a live thermocouple always shows
+  last-digit noise; a frozen value means the input is no longer updating).
 * **Over-temperature** — any valid reading above ``max_temperature_C`` aborts.
 * **Rate of rise** — heating faster than ``max_rise_rate_C_per_min``, measured
   over ``rate_window_s``, aborts (thermal runaway / bad coupling).
@@ -63,6 +66,7 @@ class SafetyMonitor:
         max_consecutive_invalid_reads: int = 3,
         plausible_min_C: float = -60.0,
         plausible_max_C: float = 600.0,
+        max_identical_reads: int = 0,
     ):
         self.max_temperature_C = float(max_temperature_C)
         self.max_rise_rate_C_per_min = float(max_rise_rate_C_per_min)
@@ -70,6 +74,9 @@ class SafetyMonitor:
         self.max_consecutive_invalid_reads = int(max_consecutive_invalid_reads)
         self.plausible_min_C = float(plausible_min_C)
         self.plausible_max_C = float(plausible_max_C)
+        self.max_identical_reads = int(max_identical_reads)
+        self._last_raw = [None, None]
+        self._identical = [0, 0]
         self._invalid_streak = 0
         self._history: Deque[Tuple[float, float]] = deque()   # (time_s, hottest °C)
 
@@ -83,6 +90,7 @@ class SafetyMonitor:
             max_consecutive_invalid_reads=safety.max_consecutive_invalid_reads,
             plausible_min_C=safety.plausible_min_C,
             plausible_max_C=safety.plausible_max_C,
+            max_identical_reads=getattr(safety, "max_identical_reads", 0),
         )
 
     # ------------------------------------------------------------------
@@ -102,10 +110,24 @@ class SafetyMonitor:
             return None, f"implausible {v:.1f} °C"
         return v, None
 
+    def _stuck(self, ch: int, value: float) -> bool:
+        if self.max_identical_reads <= 0:
+            return False
+        if value == self._last_raw[ch]:
+            self._identical[ch] += 1
+        else:
+            self._last_raw[ch] = value
+            self._identical[ch] = 1
+        return self._identical[ch] >= self.max_identical_reads
+
     def check(self, now_s: float, t1_raw, t2_raw) -> SafetyResult:
         """Evaluate one measurement cycle. ``now_s`` is a monotonic time in seconds."""
         t1, why1 = self.sanitize(t1_raw)
         t2, why2 = self.sanitize(t2_raw)
+        if t1 is not None and self._stuck(0, t1):
+            t1, why1 = None, f"stuck ({self._identical[0]} identical readings)"
+        if t2 is not None and self._stuck(1, t2):
+            t2, why2 = None, f"stuck ({self._identical[1]} identical readings)"
         flags = []
         if why1:
             flags.append(f"T1 {why1}")

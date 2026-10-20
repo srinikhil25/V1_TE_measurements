@@ -168,12 +168,12 @@ def test_connect_failure_reports_error_and_releases(cfg):
     assert "disconnect" in rig.calls
 
 
-def test_run_is_saved_row_by_row_with_outcome(cfg, temp_db, monkeypatch):
+def test_run_is_saved_row_by_row_with_outcome(cfg, app_db, monkeypatch):
     from datetime import datetime
 
     from app.models.db_models import Lab, Measurement, MeasurementIntegrity, MeasurementRow, User
 
-    _path, factory = temp_db
+    _path, factory = app_db
     s = factory()
     u = User(username="admin", email="a@x", password_hash="h", role="super_admin",
              lab_id=None, active=True, created_at=datetime.utcnow())
@@ -198,5 +198,15 @@ def test_run_is_saved_row_by_row_with_outcome(cfg, temp_db, monkeypatch):
     assert len(rows) == len(mgr.get_data())
     assert json.loads(rows[-1].data_json)["valid"] is True
     assert s.query(MeasurementIntegrity).filter_by(measurement_id=m.id).one().data_hash
-    assert "_user_id" not in json.loads(m.params_json)
+    params = json.loads(m.params_json)
+    assert "_user_id" not in params
+    ctx = params["run_context"]
+    assert ctx["software"]["version"] and ctx["config"]["safety"]["max_temperature_C"] == 30.0
     s.close()
+
+    from app.core import audit
+    entries = list(reversed(audit.recent(measurement_id=m.id)))
+    assert [e["action"] for e in entries] == ["run_started", "run_ended"]
+    assert entries[1]["details"]["outcome"] == sm.STATUS_ABORTED
+    assert "over-temperature" in entries[1]["reason"]
+    assert audit.verify_chain()["ok"]

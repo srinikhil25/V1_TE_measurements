@@ -121,6 +121,10 @@ class SafetyLimits:
     max_consecutive_invalid_reads: int = 3   # abort after this many bad TC reads in a row
     plausible_min_C: float = -60.0           # readings outside [min, max] are invalid
     plausible_max_C: float = 600.0
+    # A live thermocouple always shows some last-digit noise; this many
+    # bit-identical readings in a row means a frozen/disconnected input
+    # (0 disables the check).
+    max_identical_reads: int = 30
 
 
 @dataclass
@@ -209,6 +213,9 @@ def validate(cfg: AppConfig) -> List[str]:
     if (not isinstance(s.max_consecutive_invalid_reads, int) or isinstance(s.max_consecutive_invalid_reads, bool)
             or not (1 <= s.max_consecutive_invalid_reads <= 20)):
         p.append("safety.max_consecutive_invalid_reads: must be an integer 1–20")
+    if (not isinstance(s.max_identical_reads, int) or isinstance(s.max_identical_reads, bool)
+            or not (s.max_identical_reads == 0 or 5 <= s.max_identical_reads <= 1000)):
+        p.append("safety.max_identical_reads: must be 0 (off) or an integer 5–1000")
     if not (_finite(s.plausible_min_C) and _finite(s.plausible_max_C)) or s.plausible_min_C >= s.plausible_max_C:
         p.append("safety.plausible_min_C must be below plausible_max_C")
     elif _finite(s.max_temperature_C) and s.max_temperature_C >= s.plausible_max_C:
@@ -408,6 +415,21 @@ def save_config(cfg: AppConfig) -> None:
         _cached = cfg.copy()
         _warnings = []
     logger.info("Saved config to %s", config_path())
+
+
+def diff_configs(old: AppConfig, new: AppConfig) -> dict:
+    """{"section.key": [old, new]} for every value that differs (for the audit trail)."""
+    out = {}
+
+    def walk(a, b, prefix):
+        for k in a:
+            if isinstance(a[k], dict):
+                walk(a[k], b[k], f"{prefix}{k}.")
+            elif a[k] != b[k]:
+                out[f"{prefix}{k}"] = [a[k], b[k]]
+
+    walk(old.to_dict(), new.to_dict(), "")
+    return out
 
 
 def load_warnings() -> List[str]:

@@ -93,3 +93,26 @@ class MeasurementIntegrity(Base):
     )
     data_hash   = Column(String(128), nullable=False)
     created_at  = Column(DateTime, default=func.now(), nullable=False)
+
+
+class AuditEntry(Base):
+    """Append-only, hash-chained audit trail (ALCOA+).
+
+    Rows are never updated or deleted (enforced by database triggers, see
+    migration 0003). Each row's ``entry_hash`` covers its content plus the
+    previous row's hash, so any later edit or removal breaks the chain and is
+    detected by ``app.core.audit.verify_chain``.
+    """
+
+    __tablename__ = "audit_trail"
+
+    id             = Column(Integer, primary_key=True)
+    timestamp      = Column(String(32), nullable=False, index=True)  # ISO-8601 UTC
+    user_id        = Column(Integer, nullable=True)   # no FK: the trail outlives accounts
+    username       = Column(String(50), nullable=True)
+    action         = Column(String(50), nullable=False)
+    measurement_id = Column(Integer, nullable=True, index=True)
+    details        = Column(Text, nullable=True)      # JSON
+    reason         = Column(Text, nullable=True)
+    prev_hash      = Column(String(64), nullable=False)
+    entry_hash     = Column(String(64), nullable=False)

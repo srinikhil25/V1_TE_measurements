@@ -940,6 +940,28 @@ class SeebeckSystem:
         logger.info("Heater relay select: %s (relay not yet wired — manual setup)",
                     probe_mode)
 
+    def identify(self) -> dict:
+        """Address and *IDN? of each connected instrument, for the run record.
+
+        Only the Keithleys are queried (SCPI *IDN?). The P4K-80M speaks its own
+        '#1 ...' protocol, so it is never sent a foreign command — its address
+        is recorded only. Never raises.
+        """
+        info = {}
+        for key, dev in (("k2182a", self.k2182a), ("k2700", self.k2700), ("k2401", self.k2401)):
+            idn = None
+            if getattr(dev, "connected", False) and getattr(dev, "instrument", None) is not None:
+                try:
+                    idn = str(dev.instrument.query("*IDN?")).strip()
+                except Exception as exc:
+                    logger.warning("*IDN? failed on %s: %s", key, exc)
+            info[key] = {"address": getattr(dev, "resource_name", None),
+                         "connected": bool(getattr(dev, "connected", False)), "idn": idn}
+        info["pk480m"] = {"address": getattr(self.pk, "resource_name", None),
+                          "connected": bool(getattr(self.pk, "connected", False)),
+                          "idn": None, "model": "Matsusada P4K-80M"}
+        return info
+
     def initialize_all(self):
         self.k2182a.configure()
         self.k2700.configure_measurement()
