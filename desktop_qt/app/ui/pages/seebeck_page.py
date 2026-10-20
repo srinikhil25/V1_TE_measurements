@@ -32,6 +32,7 @@ from ..widgets.plot_data import ColumnBuffer, fast_time_curve, thin
 from ..widgets.profile_preview import ProfilePreview, fmt_duration, profile_duration_s
 from ..widgets.tile import Tile, icon_button
 from ..widgets.ui_kit import (
+    Callout, set_field_error,
     bin_n_text,
     Chip, KeyValueList, LegendStrip, Panel, Readout, ReadoutGrid, Segmented, Stepper,
     button, cell, field, label, make_table, page_scaffold, pen, set_props, style_plot,
@@ -193,8 +194,9 @@ class SeebeckPage(QWidget):
         setup = Panel("Run setup")
         self.inp_sample = QLineEdit()
         self.inp_sample.setPlaceholderText("e.g. Bi2Te3-001")
-        self.inp_sample.textEdited.connect(lambda _t: set_props(self.inp_sample, invalid=False))
-        setup.body.addWidget(field("Sample ID", self.inp_sample))
+        self.f_sample = field("Sample ID", self.inp_sample, required=True)
+        self.inp_sample.textChanged.connect(lambda _t: set_field_error(self.f_sample))
+        setup.body.addWidget(self.f_sample)
         self.seg_geometry = Segmented([g[1] for g in _GEOMETRY])
         self.seg_geometry.currentIndexChanged.connect(self._on_geometry_changed)
         self.lbl_geom_hint = label("", "caption", wrap=True)
@@ -264,6 +266,10 @@ class SeebeckPage(QWidget):
                             tooltip="Large gradients (> 10 %) make S less accurate."),
         }
         self.readouts = ReadoutGrid(list(self.ro.values()), 4)
+        # Why the last run ended early — stays until the next run (UI-6).
+        self.end_box = Callout("", "danger")
+        self.end_box.setVisible(False)
+        v.addWidget(self.end_box)
         v.addWidget(self.readouts)
 
         self._grid_host = QWidget()
@@ -665,16 +671,11 @@ class SeebeckPage(QWidget):
             return
         sample = self.inp_sample.text().strip()
         if not sample:
-            set_props(self.inp_sample, invalid=True)
-            reply = QMessageBox.question(
-                self, "No sample ID",
-                "No sample ID is entered. The run will be hard to find in the run library.\n\n"
-                "Start anyway?",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                QMessageBox.StandardButton.No)
-            if reply != QMessageBox.StandardButton.Yes:
-                self.inp_sample.setFocus()
-                return
+            set_field_error(self.f_sample, "Enter a sample ID — the run is filed under it "
+                                           "in the run library.")
+            self.inp_sample.setFocus()
+            self._log("Enter a sample ID to start the run.", "warning")
+            return
 
         params = {
             **wp,
@@ -684,6 +685,8 @@ class SeebeckPage(QWidget):
             "cooling_target_delta_t": self._cooling_target,
         }
 
+        self.end_box.setVisible(False)
+        self._last_instr_err = ""
         svc = SeebeckService()
         if not svc.start(params):
             QMessageBox.critical(self, "Start run", getattr(svc, "last_error", None)
@@ -760,6 +763,10 @@ class SeebeckPage(QWidget):
             self._log(f"{invalid} invalid thermocouple reading(s) so far — not used as data.",
                       "warning")
             self._last_invalid = invalid
+        instr = status.get("instrument_errors") or ""
+        if instr and instr != getattr(self, "_last_instr_err", ""):
+            self._last_instr_err = instr
+            self._log(f"Instrument not responding: {instr}", "danger")
         if status.get("polarity_warning") and not self._polarity_logged:
             self._polarity_logged = True
             self._log(status["polarity_warning"], "danger")
@@ -805,15 +812,21 @@ class SeebeckPage(QWidget):
         reason = status.get("end_reason")
         db_warning = status.get("db_warning")
         if "error" in (status.get("status") or ""):
-            title = ("Safety abort — heater switched off"
-                     if reason and reason.startswith("Safety abort") else "Measurement error")
+            safety = bool(reason and reason.startswith("Safety abort"))
+            title = "Safety abort — heater switched off" if safety else "Run stopped by an error"
             msg = reason or status.get("status")
             self._log(f"{title}: {msg}", "danger")
             if db_warning:
                 msg += "\n\n" + db_warning
-            QMessageBox.critical(self, title, msg)
+            self.end_box.set_title(title)
+            self.end_box.set(msg, "danger")
+            self.end_box.setVisible(True)
+            if safety:          # the operator must see this even if not watching the page
+                QMessageBox.critical(self, title, msg)
         elif db_warning:
-            QMessageBox.warning(self, "Measurement not saved", db_warning)
+            self.end_box.set_title("Measurement not saved")
+            self.end_box.set(db_warning, "warning")
+            self.end_box.setVisible(True)
 
     # ------------------------------------------------------------------
     # Refresh

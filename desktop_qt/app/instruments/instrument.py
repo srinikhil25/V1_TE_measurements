@@ -4,7 +4,7 @@ from typing import Optional, Dict, List, Tuple
 import logging
 
 from .visa_backend import resource_manager
-from .visa_guard import guard, transaction as _txn, write_once
+from .visa_guard import guard, report_failure, transaction as _txn, write_once
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -58,6 +58,7 @@ PK_RATED_CURRENT_A = 1.3     # P4K-80M rated output current
 class Keithley2182A:
     def __init__(self, resource_name: str = ADDR_2182A):
         self.resource_name = resource_name
+        self.last_error = None
         self.instrument = None
         self.connected = False
     def connect(self, rm=None):
@@ -71,7 +72,8 @@ class Keithley2182A:
         try:
             if rm is None:
                 rm = resource_manager()
-            self.instrument = guard(rm.open_resource(self.resource_name), "Keithley 2182A")
+            self.instrument = guard(rm.open_resource(self.resource_name), "Keithley 2182A",
+                                    address=self.resource_name)
             self.instrument.timeout = 20000
             self.connected = True
             logger.info(f"Connected to Keithley 2182A at {self.resource_name}")
@@ -79,6 +81,7 @@ class Keithley2182A:
             return True
         except Exception as e:
             error_str = str(e)
+            self.last_error = error_str
             logger.error(f"Failed to connect to Keithley 2182A: {error_str}")
             print(f"Failed to connect to Keithley 2182A: {error_str}")
             
@@ -132,8 +135,11 @@ class Keithley2182A:
             if not self.connected:
                 return None
             response = self.instrument.query(":READ?")
-            value_str = response.split(',')[0].split('_')[0].strip()
-            value = float(value_str)
+            try:
+                value = float(response.split(',')[0].split('_')[0].strip())
+            except (ValueError, IndexError, TypeError) as exc:
+                report_failure(self.instrument, "query(':READ?') reply " + repr(response)[:40], exc)
+                raise
             logger.info(f"2182A Voltage: {value}")
             print(f"2182A Voltage: {value}")
             return value
@@ -167,6 +173,7 @@ class PK480M:
 
     def __init__(self, resource_name: str = ADDR_PK480M):
         self.resource_name = resource_name
+        self.last_error = None
         self.instrument = None
         self.connected = False
     def connect(self, rm=None):
@@ -183,6 +190,7 @@ class PK480M:
             # No device clear on timeout: the Matsusada parser is only ever sent
             # its own "#1 ..." commands.
             self.instrument = guard(rm.open_resource(self.resource_name), "PK4-80M",
+                                    address=self.resource_name,
                                     clear_on_timeout=False)
             # CRITICAL: the Matsusada firmware parser needs CRLF on write and CR
             # on read. Without this the device silently ignores every command —
@@ -195,6 +203,7 @@ class PK480M:
             return True
         except Exception as e:
             error_str = str(e)
+            self.last_error = error_str
             logger.error(f"Failed to connect to PK4-80M: {error_str}")
             if "VI_ERROR_ALLOC" in error_str or "-1073807300" in error_str:
                 logger.error("VI_ERROR_ALLOC: Resource allocation failed. Check for other processes using this instrument.")
@@ -368,6 +377,7 @@ PK160 = PK480M
 class Keithley2700:
     def __init__(self, resource_name: str = ADDR_2700):
         self.resource_name = resource_name
+        self.last_error = None
         self.instrument = None
         self.connected = False
         self.measurement_data = []
@@ -383,7 +393,8 @@ class Keithley2700:
         try:
             if rm is None:
                 rm = resource_manager()
-            self.instrument = guard(rm.open_resource(self.resource_name), "Keithley 2700")
+            self.instrument = guard(rm.open_resource(self.resource_name), "Keithley 2700",
+                                    address=self.resource_name)
             self.instrument.timeout = 20000
             self.connected = True
             logger.info(f"Connected to Keithley 2700 at {self.resource_name}")
@@ -391,6 +402,7 @@ class Keithley2700:
             return True
         except Exception as e:
             error_str = str(e)
+            self.last_error = error_str
             logger.error(f"Failed to connect to Keithley 2700: {error_str}")
             print(f"Failed to connect to Keithley 2700: {error_str}")
             
@@ -452,8 +464,11 @@ class Keithley2700:
                 self.instrument.write(f":ROUT:CLOS (@{channel})")
                 time.sleep(0.05)  # reduced from 0.1 s to improve V–T correspondence (staggered acquisition error)
                 response = self.instrument.query(":READ?")
-            value_str = response.split(',')[0].split('_')[0].strip()
-            value = float(value_str)
+            try:
+                value = float(response.split(',')[0].split('_')[0].strip())
+            except (ValueError, IndexError, TypeError) as exc:
+                report_failure(self.instrument, "query(':READ?') reply " + repr(response)[:40], exc)
+                raise
             self.measurement_data.append({
                 'timestamp': time.time(),
                 'value': value,
@@ -522,6 +537,7 @@ class Keithley6221:
     """Keithley 6221 SourceMeter for current-voltage measurements and resistivity calculations."""
     def __init__(self, resource_name: str = ADDR_6221):
         self.resource_name = resource_name
+        self.last_error = None
         self.instrument = None
         self.connected = False
 
@@ -535,7 +551,8 @@ class Keithley6221:
         try:
             if rm is None:
                 rm = resource_manager()
-            self.instrument = guard(rm.open_resource(self.resource_name), "Keithley 6221")
+            self.instrument = guard(rm.open_resource(self.resource_name), "Keithley 6221",
+                                    address=self.resource_name)
             self.instrument.timeout = 20000
             self.connected = True
             logger.info(f"Connected to Keithley 6221 at {self.resource_name}")
@@ -543,6 +560,7 @@ class Keithley6221:
             return True
         except Exception as e:
             error_str = str(e)
+            self.last_error = error_str
             logger.error(f"Failed to connect to Keithley 6221: {error_str}")
             print(f"Failed to connect to Keithley 6221: {error_str}")
             if "VI_ERROR_ALLOC" in error_str or "-1073807300" in error_str:
@@ -710,6 +728,7 @@ class Keithley2401:
 
     def __init__(self, resource_name: str = ADDR_2401):
         self.resource_name = resource_name
+        self.last_error = None
         self.instrument = None
         self.connected = False
         self._source_mode = "current"
@@ -723,13 +742,15 @@ class Keithley2401:
         try:
             if rm is None:
                 rm = resource_manager()
-            self.instrument = guard(rm.open_resource(self.resource_name), "Keithley 2401")
+            self.instrument = guard(rm.open_resource(self.resource_name), "Keithley 2401",
+                                    address=self.resource_name)
             self.instrument.timeout = 20000
             self.connected = True
             logger.info(f"Connected to Keithley 2401 at {self.resource_name}")
             return True
         except Exception as e:
             error_str = str(e)
+            self.last_error = error_str
             logger.error(f"Failed to connect to Keithley 2401: {error_str}")
             if "VI_ERROR_ALLOC" in error_str or "-1073807300" in error_str:
                 logger.error("VI_ERROR_ALLOC: Resource allocation failed. Check for other processes using this instrument.")
@@ -827,7 +848,11 @@ class Keithley2401:
         try:
             resp = self.instrument.query(":READ?").strip()
             parts = [p for p in resp.replace(";", ",").split(",") if p != ""]
-            return {"voltage": float(parts[0]), "current": float(parts[1])}
+            try:
+                return {"voltage": float(parts[0]), "current": float(parts[1])}
+            except (ValueError, IndexError, TypeError) as exc:
+                report_failure(self.instrument, "query(':READ?') reply " + repr(resp)[:40], exc)
+                raise
         except Exception as e:
             logger.error("2401 read_point failed: %s (resp=%r)", e, resp)
             return None
@@ -850,6 +875,7 @@ class SeebeckSystem:
         self.k6221 = Keithley6221()   # legacy; hardware replaced by the 2401
         self.k2401 = Keithley2401()   # SourceMeter for I-V (GPIB 24)
         self.connected = False
+        self.connect_failures: List[str] = []   # set by connect_all()
         self.pk160_current_unit = "mA"  # UI/params unit (mA or A); converted to amps before ISET
 
         # Per-geometry heater limits, set by the session manager before a run.
@@ -930,6 +956,12 @@ class SeebeckSystem:
 
         ok = all(results.values())
         self.connected = ok
+        labels = {"k2182a": "Keithley 2182A", "k2700": "Keithley 2700",
+                  "pk160": "Matsusada P4K-80M", "k2401": "Keithley 2401"}
+        self.connect_failures = [
+            f"{labels[name]} ({drivers[name].resource_name}): "
+            f"{getattr(drivers[name], 'last_error', None) or 'could not connect'}"
+            for name, success in results.items() if not success]
 
         if not ok:
             # Release the instruments that DID connect, otherwise they stay
@@ -939,6 +971,12 @@ class SeebeckSystem:
             self.disconnect_all()
 
         return ok
+    def set_abort_check(self, check) -> None:
+        """While ``check()`` is True, no instrument retries a timed-out command."""
+        from .visa_guard import set_abort_check
+        for dev in (self.k2182a, self.k2700, self.pk, self.k2401):
+            set_abort_check(getattr(dev, "instrument", None), check)
+
     def disconnect_all(self):
         self.k2182a.disconnect()
         self.k2700.disconnect()

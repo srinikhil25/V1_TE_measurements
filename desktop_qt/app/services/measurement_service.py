@@ -170,6 +170,18 @@ def _linear_fit_resistance(points: List[Dict]) -> tuple:
     return R, R_squared
 
 
+#: Consecutive failed readings after which a sweep stops instead of
+#: recording empty points.
+IV_MAX_FAILED_READS = 3
+
+
+def _with_instrument_detail(reason: str) -> str:
+    """Append which instrument is failing, and how, to an end reason."""
+    from ..instruments.visa_guard import failure_summary
+    detail = failure_summary()
+    return f"{reason} — {detail}" if detail and detail not in reason else reason
+
+
 #: Below this many valid points R² is trivially high, so no ohmic verdict
 #: is given (CALC-4).
 MIN_OHMIC_POINTS = 5
@@ -340,9 +352,17 @@ def run_iv_sweep(
         else:
             sequence = forward
 
+        from ..instruments.visa_guard import reset_instrument_health
+        reset_instrument_health()              # failures are reported per run
         if not system.connect_all():
-            end_reason = "Failed to connect to instruments."
+            failed = getattr(system, "connect_failures", None) or []
+            end_reason = ("Could not connect to " + "; ".join(failed) + "."
+                          if failed else "Failed to connect to instruments.")
             raise RuntimeError(end_reason)
+        # Abort cancels the retry of a timed-out reading (one timeout at most).
+        set_abort = getattr(system, "set_abort_check", None)
+        if callable(set_abort):
+            set_abort(_aborted)
 
         # Settings snapshot (software, host, config, instrument *IDN?).
         from ..core.run_context import build_run_context
@@ -437,6 +457,7 @@ def run_iv_sweep(
         # ρ = k·R for this sample (computed once; it depends only on the
         # geometry). Corrections that could not be applied are listed in it.
         t_start = time.monotonic()
+        failed_reads = 0
         for idx, level in enumerate(sequence):
             if _aborted():
                 break
@@ -444,9 +465,18 @@ def run_iv_sweep(
             time.sleep(delay_s)
             meas = system.k2401.read_point()
             if meas is None:
+                if _aborted():
+                    break                      # the read was cut short by Abort
+                failed_reads += 1
+                if failed_reads >= IV_MAX_FAILED_READS:
+                    end_reason = _with_instrument_detail(
+                        f"Keithley 2401 gave no reading {failed_reads} times in a row "
+                        "— sweep stopped")
+                    raise RuntimeError(end_reason)
                 pt = {"voltage": None, "current": None, "resistance": None}
                 pt["current" if is_current else "voltage"] = level
             else:
+                failed_reads = 0
                 v = meas["voltage"]
                 i = meas["current"]
                 r = (v / i) if (i and abs(i) > 1e-12) else None
@@ -479,7 +509,7 @@ def run_iv_sweep(
     except Exception as exc:
         logger.error("IV sweep error: %s", exc)
         outcome = "error"
-        end_reason = end_reason or f"Error: {exc}"
+        end_reason = end_reason or _with_instrument_detail(f"Error: {exc}")
         raise
     finally:
         if system is not None:

@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Optional
 from .instrument import SeebeckSystem
 from .safety import SafetyMonitor
 from .seebeck_analysis import binned_seebeck_analysis, polarity_verdict, polarity_vote
+from .visa_guard import failure_summary, reset_instrument_health
 from ..core import audit
 from ..core.config import get_config
 from ..core.run_context import build_run_context
@@ -185,6 +186,7 @@ class MeasurementSessionManager:
             "db_warning": self.db_warning,
             "invalid_reads": self.invalid_reads,
             "polarity_warning": self.polarity_warning,
+            "instrument_errors": failure_summary() if self.session_thread else "",
             "measurement_id": self._db_measurement_id,
         }
         if self.session_total_steps and self.session_params:
@@ -207,6 +209,14 @@ class MeasurementSessionManager:
     # ------------------------------------------------------------------
     # Worker
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _with_instrument_detail(reason: str) -> str:
+        """Append which instrument is failing, and how, to an end reason."""
+        detail = failure_summary()
+        if detail and detail not in reason:
+            return f"{reason} — {detail}"
+        return reason
 
     def _heater_off_now(self, context: str) -> None:
         """Switch the heater off immediately; never raises."""
@@ -269,10 +279,14 @@ class MeasurementSessionManager:
         started_audited = False
         try:
             cfg = get_config()
+            reset_instrument_health()          # failures are reported per run
             # Connect to all instruments
             if not self.seebeck_system.connect_all():
-                self.end_reason = ("Failed to connect to one or more instruments. "
-                                   "Please check instrument connections and try again.")
+                failed = getattr(self.seebeck_system, "connect_failures", None) or []
+                self.end_reason = (("Could not connect to " + "; ".join(failed) + ".")
+                                   if failed else
+                                   "Failed to connect to one or more instruments.") + \
+                    " Check the instrument is on and connected, then try again."
                 self.session_status = f"error: {self.end_reason}"
                 self.session_active = False
                 logger.error("Failed to connect to instruments. Session aborted.")
@@ -280,6 +294,10 @@ class MeasurementSessionManager:
 
             # Settings snapshot: software, host, rig config, instrument *IDN?.
             # Taken before initialise so no query interleaves with heater control.
+            # A Stop request cancels the retry of a timed-out command.
+            set_abort = getattr(self.seebeck_system, "set_abort_check", None)
+            if callable(set_abort):
+                set_abort(lambda: self._stop_requested)
             identify = getattr(self.seebeck_system, "identify", None)
             instruments = identify() if callable(identify) else {}
             self._run_context = build_run_context(instruments, cfg)
@@ -295,7 +313,8 @@ class MeasurementSessionManager:
             try:
                 self.seebeck_system.initialize_all()
             except Exception as e:
-                self.end_reason = f"Failed to initialize instruments: {e}"
+                self.end_reason = self._with_instrument_detail(
+                    f"Failed to initialize instruments: {e}")
                 self.session_status = f"error: {self.end_reason}"
                 self.session_active = False
                 logger.error(self.end_reason)
@@ -373,6 +392,8 @@ class MeasurementSessionManager:
             mono_start = time.monotonic()
             cooling_tail_start_time = None
             safety_tripped = False
+            instrument_failed = False
+            temf_fail_streak = 0
 
             while self.session_active:
                 loop_start = time.time()
@@ -423,7 +444,8 @@ class MeasurementSessionManager:
                     # Heater off FIRST — before any bookkeeping.
                     self._heater_off_now("Safety abort")
                     safety_tripped = True
-                    self.end_reason = f"Safety abort: {check.abort_reason}"
+                    self.end_reason = self._with_instrument_detail(
+                        f"Safety abort: {check.abort_reason}")
                     logger.critical(self.end_reason)
                 if not check.valid:
                     self.invalid_reads += 1
@@ -506,6 +528,16 @@ class MeasurementSessionManager:
                 if safety_tripped:
                     break
 
+                temf_fail_streak = temf_fail_streak + 1 if temf_mv is None else 0
+                if temf_fail_streak >= safety.max_consecutive_invalid_reads:
+                    self._heater_off_now("Instrument failure")
+                    instrument_failed = True
+                    self.end_reason = self._with_instrument_detail(
+                        f"Keithley 2182A gave no TEMF reading {temf_fail_streak} times "
+                        "in a row — run stopped")
+                    logger.error(self.end_reason)
+                    break
+
                 # Cooling tail: output already turned off above; keep measuring until |ΔT| < target or timeout
                 if phase == "cooling_tail":
                     if cooling_tail_start_time is None:
@@ -528,6 +560,9 @@ class MeasurementSessionManager:
             if safety_tripped:
                 outcome = STATUS_ABORTED
                 self.session_status = f"error: {self.end_reason}"
+            elif instrument_failed:
+                outcome = STATUS_ERROR
+                self.session_status = f"error: {self.end_reason}"
             elif self._stop_requested:
                 outcome = STATUS_STOPPED
                 self.end_reason = self.end_reason or "Stopped by operator"
@@ -541,7 +576,7 @@ class MeasurementSessionManager:
             self.session_total_steps = 0
         except Exception as e:
             outcome = STATUS_ERROR
-            self.end_reason = f"Error: {e}"
+            self.end_reason = self._with_instrument_detail(f"Error: {e}")
             logger.exception("Seebeck session error")
             self.session_status = f"error: {str(e)}"
             self.session_active = False

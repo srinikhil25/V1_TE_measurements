@@ -15,7 +15,7 @@ from typing import Dict, List, Optional
 import pyqtgraph as pg
 from openpyxl import Workbook
 from openpyxl.drawing.image import Image as XLImage
-from PyQt6.QtCore import Qt, QThread, pyqtSignal
+from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer
 from PyQt6.QtWidgets import (
     QAbstractSpinBox, QCheckBox, QDoubleSpinBox, QFileDialog, QFrame, QGridLayout,
     QHBoxLayout, QLineEdit, QMessageBox, QProgressBar, QScrollArea, QSpinBox,
@@ -25,6 +25,7 @@ from PyQt6.QtWidgets import (
 from .. import theme as T
 from ..widgets.tile import icon_button
 from ..widgets.ui_kit import (
+    Callout, set_field_error,
     ohmic_label,
     LegendStrip, Panel, Readout, ReadoutGrid, Segmented, button, cell, field, fmt_sci,
     label, make_table, page_scaffold, pen, set_props, style_plot,
@@ -174,15 +175,19 @@ class IVPage(QWidget):
         sp = Panel("Sample")
         self.le_sample_id = QLineEdit()
         self.le_sample_id.setPlaceholderText("e.g. constantan-02")
-        self.le_sample_id.textEdited.connect(lambda _t: set_props(self.le_sample_id, invalid=False))
+        self.le_sample_id.textChanged.connect(lambda _t: set_props(self.le_sample_id, invalid=False))
         self.le_operator = QLineEdit()
         self.le_operator.setPlaceholderText("Operator")
         if self._user:
             self.le_operator.setText(getattr(self._user, "username", "") or "")
         self.le_notes = QLineEdit()
         self.le_notes.setPlaceholderText("Optional")
-        sp.body.addWidget(field("Sample ID", self.le_sample_id))
-        sp.body.addWidget(_pair(field("Operator", self.le_operator), field("Notes", self.le_notes)))
+        self.f_sample = field("Sample ID", self.le_sample_id, required=True)
+        self.f_operator = field("Operator", self.le_operator, required=True)
+        self.le_sample_id.textChanged.connect(lambda _t: set_field_error(self.f_sample))
+        self.le_operator.textChanged.connect(lambda _t: set_field_error(self.f_operator))
+        sp.body.addWidget(self.f_sample)
+        sp.body.addWidget(_pair(self.f_operator, field("Notes", self.le_notes)))
         v.addWidget(sp)
 
         # ── Geometry ──────────────────────────────────────────────────
@@ -193,12 +198,23 @@ class IVPage(QWidget):
         self.sb_length_cm = _spinbox(0.0001, 100, 1.0, 4, "cm")
         self.sb_width_cm = _spinbox(0.0001, 100, 0.5, 4, "cm")
         self.sb_spacing_cm = _spinbox(0.0001, 10, 0.1, 4, "cm")
-        self.sb_thickness_cm = _spinbox(0.0001, 10, 0.0525, 4, "cm")
+        # 6 decimals in cm = 10 nm steps: thin films (MXene, ~µm) need it.
+        self.sb_thickness_cm = _spinbox(0.000001, 10, 0.0525, 6, "cm")
         gp.body.addWidget(_pair(field("Length", self.sb_length_cm), field("Width", self.sb_width_cm)))
         gp.body.addWidget(_pair(field("Thickness", self.sb_thickness_cm),
                                 field("Probe spacing", self.sb_spacing_cm)))
         self.lbl_geom_hint = label("", "caption", wrap=True)
         gp.body.addWidget(self.lbl_geom_hint)
+        # Live check of the geometry against the resistivity model (UI-8).
+        self.geom_check = Callout("", "warning", title="Resistivity will not be fully corrected")
+        self.geom_check.setVisible(False)
+        gp.body.addWidget(self.geom_check)
+        self._geom_timer = QTimer(self)
+        self._geom_timer.setSingleShot(True)
+        self._geom_timer.setInterval(250)          # the 4PP image sum is ~50 ms
+        self._geom_timer.timeout.connect(self._check_geometry)
+        for sb in (self.sb_length_cm, self.sb_width_cm, self.sb_thickness_cm, self.sb_spacing_cm):
+            sb.valueChanged.connect(lambda _v: self._geom_timer.start())
         v.addWidget(gp)
 
         # ── Sweep ─────────────────────────────────────────────────────
@@ -264,6 +280,10 @@ class IVPage(QWidget):
         self.ro_n = Readout("Points", "")
         self.readouts = ReadoutGrid([self.ro_R, self.ro_rho, self.ro_sigma, self.ro_R2,
                                      self.ro_ohmic, self.ro_cf, self.ro_T, self.ro_n], 4)
+        # Why the last sweep failed — stays until the next sweep (UI-6).
+        self.err_box = Callout("", "danger", title="Sweep failed")
+        self.err_box.setVisible(False)
+        v.addWidget(self.err_box)
         v.addWidget(self.readouts)
 
         split = QSplitter(Qt.Orientation.Vertical)
@@ -371,6 +391,8 @@ class IVPage(QWidget):
         else:
             self.lbl_geom_hint.setText(
                 "Uniform bar, current along its length. ρ = R·(W·t)/L.")
+        if hasattr(self, "_geom_timer"):
+            self._geom_timer.start()
         if self._result_summary:
             self._update_metric_cards()
 
@@ -424,19 +446,48 @@ class IVPage(QWidget):
                   self.cb_bidirectional, self.cb_four_wire, self.le_sample_id):
             w.setEnabled(not running)
 
+    def _geometry_notes(self) -> list:
+        from ...services.measurement_service import resistivity_model
+
+        def _dim(sb):
+            return sb.value() if sb.value() > 1e-9 else None
+        geometry = {1: "vdp", 2: "4pp"}.get(self.cb_geometry.currentIndex(), "bar")
+        return resistivity_model(geometry, _dim(self.sb_length_cm), _dim(self.sb_width_cm),
+                                 _dim(self.sb_thickness_cm), _dim(self.sb_spacing_cm))["notes"]
+
+    def _check_geometry(self):
+        notes = self._geometry_notes()
+        self.geom_check.set_text("\n".join(notes))
+        self.geom_check.setVisible(bool(notes))
+
     def _run(self):
         sample = self.le_sample_id.text().strip()
+        operator = self.le_operator.text().strip()
+        missing = False
+        if not operator:
+            set_field_error(self.f_operator, "Enter who is running the sweep.")
+            self.le_operator.setFocus()
+            missing = True
         if not sample:
-            set_props(self.le_sample_id, invalid=True)
+            set_field_error(self.f_sample, "Enter a sample ID — the sweep is filed under it "
+                                           "in the run library.")
+            self.le_sample_id.setFocus()
+            missing = True
+        if missing:
+            self.lbl_status.setText("Fill in the required fields to run the sweep.")
+            return
+
+        notes = self._geometry_notes()
+        if notes:
             reply = QMessageBox.question(
-                self, "No sample ID",
-                "No sample ID is entered. The sweep will be hard to find in the run library.\n\n"
-                "Run anyway?",
+                self, "Check the geometry",
+                "The resistivity of this sweep will not be fully corrected:\n\n• "
+                + "\n• ".join(notes) + "\n\nRun anyway? (R is measured either way.)",
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                 QMessageBox.StandardButton.No)
             if reply != QMessageBox.StandardButton.Yes:
-                self.le_sample_id.setFocus()
                 return
+        self.err_box.setVisible(False)
 
         self._abort_flag.abort_requested = False
         self._set_running(True)
@@ -500,7 +551,14 @@ class IVPage(QWidget):
 
     def _abort(self):
         self._abort_flag.abort_requested = True
-        self.lbl_status.setText("Aborting after the current point…")
+        try:
+            from ...core.config import get_config
+            wait_s = get_config().visa_timeout_ms.k2401 / 1000.0
+        except Exception:
+            wait_s = None
+        self.lbl_status.setText(
+            "Stopping — finishing the current reading"
+            + (f" (up to {wait_s:g} s if the SourceMeter does not answer)…" if wait_s else "…"))
 
     def _on_progress(self, index: int, point: Dict):
         self._results.append(point)
@@ -616,12 +674,13 @@ class IVPage(QWidget):
 
     def _on_error(self, msg: str):
         self._set_running(False)
-        self.lbl_status.setText("The sweep failed — see the message.")
+        self.lbl_status.setText("The sweep failed — see the message above the results.")
         self.toolbar.set_subtitle("Last sweep failed")
-        QMessageBox.critical(
-            self, "I-V sweep error",
-            f"The sweep failed:\n\n{msg}\n\n"
-            "Check that the SourceMeter is connected and switched on, then try again.")
+        self.err_box.set_text(
+            f"{msg}\n\nCheck that the instrument is switched on and connected (GPIB cable, "
+            "address in Settings), then run the sweep again. Points measured before the "
+            "failure are kept in the run library.")
+        self.err_box.setVisible(True)
 
     # ------------------------------------------------------------------
     # Export

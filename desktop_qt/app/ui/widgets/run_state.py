@@ -51,6 +51,11 @@ class RunStateMonitor(QObject):
                 self._iv_started = None
         except Exception:
             pass
+        try:
+            from ...instruments.visa_guard import instrument_health
+            st["instrument_health"] = instrument_health()
+        except Exception:
+            st["instrument_health"] = {}
         self.state = st
         self.changed.emit(st)
 

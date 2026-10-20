@@ -491,7 +491,23 @@ def field(caption: str, widget: QWidget, hint: str = "", *, required: bool = Fal
     lay.addWidget(widget)
     if hint:
         lay.addWidget(label(hint, "caption", wrap=True))
+    w.error_lbl = label("", "caption", wrap=True, tone="danger")
+    w.error_lbl.setVisible(False)
+    lay.addWidget(w.error_lbl)
     return w
+
+
+def set_field_error(fw: QWidget, text: str = "") -> None:
+    """Show (or clear, with "") an inline error under a field() and mark its input."""
+    lbl = getattr(fw, "error_lbl", None)
+    if lbl is not None:
+        lbl.setText(text)
+        lbl.setVisible(bool(text))
+    for inp in fw.findChildren(QWidget):
+        if inp.property("invalid") is not None or inp.inherits("QLineEdit") \
+                or inp.inherits("QAbstractSpinBox"):
+            set_props(inp, invalid=bool(text))
+            break
 
 
 class KeyValueList(QWidget):
@@ -559,10 +575,11 @@ class Callout(QFrame):
         lay.addWidget(self._ic, 0, Qt.AlignmentFlag.AlignTop)
         col = QVBoxLayout()
         col.setSpacing(2)
-        if title:
-            t = QLabel(title)
-            t.setStyleSheet("font-weight: 600; font-size: 12px;")
-            col.addWidget(t)
+        self.title_lbl = QLabel(title)
+        self.title_lbl.setStyleSheet("font-weight: 600; font-size: 12px;")
+        self.title_lbl.setWordWrap(True)
+        self.title_lbl.setVisible(bool(title))
+        col.addWidget(self.title_lbl)
         self.text_lbl = QLabel(text)
         self.text_lbl.setWordWrap(True)
         self.text_lbl.setStyleSheet("font-size: 12px;")
@@ -571,6 +588,10 @@ class Callout(QFrame):
 
     def set_text(self, text: str) -> None:
         self.text_lbl.setText(text)
+
+    def set_title(self, title: str) -> None:
+        self.title_lbl.setText(title)
+        self.title_lbl.setVisible(bool(title))
 
     def set(self, text: str, kind: str) -> None:
         """Change message and kind (info · warning · danger · success) in place."""

@@ -1,5 +1,7 @@
 """Status footer — instruments · safety limits · run / saving state · version."""
 
+import time
+
 from PyQt6.QtCore import QSize, Qt, QTimer
 from PyQt6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QWidget
 
@@ -91,8 +93,24 @@ class StatusFooter(QWidget):
             self.lbl_safety.setText("Safety limits unavailable")
 
     def _on_scan(self, available):
+        self._available = available
+        self._scanned_at = time.time()
+        self._paint()
+
+    def _paint(self):
+        """Dot colour = scan result, overridden by a failure seen since the scan."""
+        available = getattr(self, "_available", "unscanned")
+        health = getattr(self, "_health", {}) or {}
+        scanned_at = getattr(self, "_scanned_at", 0.0)
         for addr, (dot, cell, full) in self._dots.items():
-            if available is None:
+            h = health.get(str(addr).strip().upper())
+            if h and h.get("consecutive_failures") and (h.get("last_error_at") or 0) > scanned_at:
+                dot.set_color(T.DANGER_LIVE)
+                cell.setToolTip(f"{full} · {addr} · NOT RESPONDING: {h.get('last_error')}")
+            elif available == "unscanned":
+                dot.set_color(T.CHROME_MUTED, hollow=True)
+                cell.setToolTip(f"{full} · {addr} · not checked yet")
+            elif available is None:
                 dot.set_color(T.CHROME_MUTED, hollow=True)
                 cell.setToolTip(f"{full} · {addr} · VISA not available")
             elif addr in available:
@@ -103,6 +121,10 @@ class StatusFooter(QWidget):
                 cell.setToolTip(f"{full} · {addr} · not found on the bus")
 
     def set_run_state(self, st: dict):
+        health = st.get("instrument_health") or {}
+        if health != getattr(self, "_health", {}):
+            self._health = health
+            self._paint()
         if st.get("running"):
             mid = st.get("measurement_id")
             text = st.get("label", "Run")
