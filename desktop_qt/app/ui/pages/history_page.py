@@ -23,6 +23,7 @@ from PyQt6.QtWidgets import (
 
 from .. import theme as T
 from ..icons import icon as _icon
+from ..widgets.plot_data import fast_time_curve
 from ..widgets.ui_kit import (
     Chip, EmptyState, KeyValueList, LegendStrip, Panel, STATUS_CHIP, Segmented, button,
     cell, chip_cell, fmt_sci, label, make_table, page_scaffold, pen, set_props, style_plot,
@@ -607,6 +608,11 @@ class RunDetailWindow(QWidget):
             if not integrity:
                 tb.middle.itemAt(tb.middle.count() - 1).widget().setToolTip(
                     "The stored readings no longer match the hash recorded when the run ended.")
+        backend = str(((self._params.get("run_context") or {}).get("visa_backend")) or "")
+        if backend.lower().endswith("@sim"):
+            sim = Chip("Simulated rig", "warning")
+            sim.setToolTip(f"Recorded with simulated instruments ({backend}) — not a measurement.")
+            tb.add_middle(sim)
         self._body = body
         self.btn_graphs = button("Save graphs…", icon="image")
         self.btn_data = button("Save data…", icon="download")
@@ -645,11 +651,15 @@ class RunDetailWindow(QWidget):
         pi.vb.sigResized.connect(_sync)
         _sync()
         times = [r.get("Time [s]", 0) for r in data]
-        pi.plot(times, _v([r.get("Temp1 [oC]") for r in data]), pen=pen(T.SERIES_T1))
-        pi.plot(times, _v([r.get("Temp2 [oC]") for r in data]), pen=pen(T.SERIES_T2))
-        temf_curve = pg.PlotCurveItem(times, _v([r.get("TEMF [mV]") for r in data]),
-                                      pen=pen(T.SERIES_TEMF, 1.6, dashed=True))
+        # Long runs: draw a few points per pixel, full detail when zoomed in.
+        fast_time_curve(pi.plot(times, _v([r.get("Temp1 [oC]") for r in data]),
+                                pen=pen(T.SERIES_T1)))
+        fast_time_curve(pi.plot(times, _v([r.get("Temp2 [oC]") for r in data]),
+                                pen=pen(T.SERIES_T2)))
+        temf_curve = pg.PlotDataItem(times, _v([r.get("TEMF [mV]") for r in data]),
+                                     pen=pen(T.SERIES_TEMF, 1.6, dashed=True))
         vb.addItem(temf_curve)
+        fast_time_curve(temf_curve)       # only once it is inside its ViewBox
         self._live = live
 
         temf_dt = pg.PlotWidget()
