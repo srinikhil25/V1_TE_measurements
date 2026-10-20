@@ -22,6 +22,46 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 os.environ["APPDATA"] = tempfile.mkdtemp(prefix="te-tests-")
 
 
+# ── Real instruments are off limits ─────────────────────────────────────────
+# Opening the default VISA library (NI-VISA) from a test reaches the real GPIB
+# bus — on the lab PC that can disturb a running measurement, and a scan still
+# inside NI-VISA when the test process exits can hang it. Tests use the
+# simulated rig (TE_VISA_BACKEND=sim) or fakes; anything else fails here.
+import pyvisa  # noqa: E402
+
+_real_rm_new = pyvisa.ResourceManager.__new__
+
+
+def _no_real_visa(cls, visa_library="", *args, **kwargs):
+    if isinstance(visa_library, str) and not visa_library.strip():
+        raise RuntimeError("Tests must not open the real VISA library; use the "
+                           "simulated rig (TE_VISA_BACKEND=sim) or a fake.")
+    return _real_rm_new(cls, visa_library, *args, **kwargs)
+
+
+pyvisa.ResourceManager.__new__ = _no_real_visa
+
+
+@pytest.fixture(autouse=True)
+def no_instrument_scan(monkeypatch):
+    """No background GPIB scan in any test.
+
+    Widgets schedule a scan with a delayed timer, and pytest-qt processes Qt
+    events after EVERY test — so a timer from one test fires in a later one.
+    Stubbing per file let that later scan reach the real library.
+    """
+    from app.services import instrument_scan
+    monkeypatch.setattr(instrument_scan, "start_resource_scan", lambda cb: False)
+
+
+def pytest_sessionfinish(session, exitstatus):
+    """Turn a hang at interpreter exit into a diagnosis instead of silence:
+    if the process is still alive 60 s after the last test, print every
+    thread's stack and exit."""
+    import faulthandler
+    faulthandler.dump_traceback_later(60, exit=True)
+
+
 @pytest.fixture(autouse=True)
 def isolated_config(tmp_path, monkeypatch):
     """Every test gets its own config file and a fresh config cache."""

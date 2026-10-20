@@ -36,12 +36,6 @@ def test_thin_bounds_points_and_keeps_newest():
 pytest.importorskip("pytestqt")
 
 
-@pytest.fixture(autouse=True)
-def no_visa_scan(monkeypatch):
-    from app.services import instrument_scan
-    monkeypatch.setattr(instrument_scan, "start_resource_scan", lambda cb: False)
-
-
 def _rows(n, cool_from=None):
     rows = []
     for i in range(n):

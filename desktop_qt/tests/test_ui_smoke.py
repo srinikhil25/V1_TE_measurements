@@ -12,12 +12,6 @@ def admin():
     return SimpleNamespace(id=1, username="superadmin", role="super_admin", lab_id=None)
 
 
-@pytest.fixture(autouse=True)
-def no_visa_scan(monkeypatch):
-    from app.services import instrument_scan
-    monkeypatch.setattr(instrument_scan, "start_resource_scan", lambda cb: False)
-
-
 def test_settings_page_round_trips_config(qtbot, admin):
     from app.core import config as C
     from app.ui.pages.settings_page import SettingsPage

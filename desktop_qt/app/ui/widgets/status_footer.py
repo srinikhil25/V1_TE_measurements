@@ -19,7 +19,13 @@ class StatusFooter(QWidget):
         self._build()
         status = instrument_status()
         status.updated.connect(self._on_scan)
-        QTimer.singleShot(900, status.refresh)
+        # First scan shortly after start-up. The timer is a child of the footer,
+        # so it dies with it: a bare singleShot to the app-wide status object
+        # would still fire after the footer (or a test's window) is gone.
+        self._first_scan = QTimer(self)
+        self._first_scan.setSingleShot(True)
+        self._first_scan.timeout.connect(status.refresh)
+        self._first_scan.start(900)
 
     def _build(self):
         lay = QHBoxLayout(self)
