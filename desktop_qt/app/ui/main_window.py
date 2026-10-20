@@ -1,24 +1,27 @@
-"""Main application window — sidebar + stacked pages."""
+"""Main application window — top bar · navigation rail · pages · status footer."""
 
-from PyQt6.QtWidgets import (
-    QMainWindow, QWidget, QHBoxLayout, QVBoxLayout,
-    QStackedWidget, QStatusBar, QLabel, QMessageBox, QApplication,
-)
-from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QKeySequence, QShortcut
+from PyQt6.QtWidgets import (
+    QApplication, QHBoxLayout, QLabel, QMainWindow, QMessageBox, QStackedWidget,
+    QVBoxLayout, QWidget,
+)
 
-from .theme import CONTENT_BG, BORDER, TEXT_SECONDARY
-from .widgets.sidebar import Sidebar
 from .widgets.header_bar import HeaderBar
+from .widgets.run_state import RunStateMonitor
+from .widgets.sidebar import LABEL_OF, SECTION_OF, Sidebar
+from .widgets.status_footer import StatusFooter
+from .widgets.ui_kit import EmptyState
 
 # Page titles keyed by page_key
 PAGE_TITLES = {
-    "dashboard":  "Dashboard",
-    "seebeck":    "Seebeck Measurement",
-    "iv":         "I-V Sweep",
-    "history":    "Measurement History",
-    "users":      "User Management",
-    "settings":   "Settings",
+    "dashboard": "Overview",
+    "seebeck":   "Seebeck",
+    "iv":        "I-V sweep",
+    "history":   "Run library",
+    "users":     "Users",
+    "audit":     "Audit trail",
+    "settings":  "Settings",
 }
 
 
@@ -27,8 +30,8 @@ class MainWindow(QMainWindow):
         super().__init__()
         self._user = user
         self.setWindowTitle("TE Measurement")
-        self.setMinimumSize(1100, 700)
-        self.resize(1200, 760)
+        self.setMinimumSize(1180, 720)
+        self.resize(1440, 900)
         self._pages: dict = {}
         self._build_ui()
         self._navigate("dashboard")
@@ -38,54 +41,43 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
 
     def _build_ui(self):
-        self.setStyleSheet(f"background-color: {CONTENT_BG};")
-
         central = QWidget()
+        central.setObjectName("Page")
         self.setCentralWidget(central)
-
-        root = QHBoxLayout(central)
+        root = QVBoxLayout(central)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
 
-        # Sidebar
-        self.sidebar = Sidebar(self._user.role, self._user.username)
-        self.sidebar.page_requested.connect(self._navigate)
-        root.addWidget(self.sidebar)
-
-
-        # Right side
-        right = QWidget()
-        right.setStyleSheet(f"background-color: {CONTENT_BG};")
-        right_layout = QVBoxLayout(right)
-        right_layout.setContentsMargins(0, 0, 0, 0)
-        right_layout.setSpacing(0)
-
-        # Header bar
         self.header = HeaderBar(self._user.username, self._user.role)
         self.header.logout_requested.connect(self._on_logout)
-        self.header.sidebar_toggled.connect(self.sidebar.toggle)
-        right_layout.addWidget(self.header)
+        self.header.navigate_requested.connect(self._navigate)
+        root.addWidget(self.header)
 
-        # Ctrl+\ toggles sidebar — also fires the button's visual state update
+        middle = QHBoxLayout()
+        middle.setContentsMargins(0, 0, 0, 0)
+        middle.setSpacing(0)
+        self.sidebar = Sidebar(self._user.role, self._user.username)
+        self.sidebar.page_requested.connect(self._navigate)
+        self.header.sidebar_toggled.connect(self.sidebar.toggle)
+        middle.addWidget(self.sidebar)
+
+        self.stack = QStackedWidget()
+        self.stack.setObjectName("Page")
+        middle.addWidget(self.stack, 1)
+        root.addLayout(middle, 1)
+
+        self.footer = StatusFooter()
+        root.addWidget(self.footer)
+        # Kept for the run guard below (shows "Stopping…" while it waits).
+        self.status_lbl = self.footer.lbl_run
+
+        # Ctrl+\ toggles the navigation rail
         sc = QShortcut(QKeySequence("Ctrl+\\"), self)
         sc.activated.connect(self.header._on_toggle)
 
-        # Stacked pages
-        self.stack = QStackedWidget()
-        self.stack.setStyleSheet(f"background-color: {CONTENT_BG};")
-        right_layout.addWidget(self.stack)
-
-        root.addWidget(right)
-
-        # Status bar
-        sb = QStatusBar()
-        sb.setStyleSheet(
-            f"QStatusBar {{ background: white; border-top: 1px solid {BORDER}; "
-            f"color: {TEXT_SECONDARY}; font-size: 11px; }}"
-        )
-        self.status_lbl = QLabel("Ready")
-        sb.addPermanentWidget(self.status_lbl)
-        self.setStatusBar(sb)
+        self.run_state = RunStateMonitor(self)
+        self.run_state.changed.connect(self.header.set_run_state)
+        self.run_state.changed.connect(self.footer.set_run_state)
 
     # ------------------------------------------------------------------
     # Page factory — lazy instantiation
@@ -103,7 +95,8 @@ class MainWindow(QMainWindow):
 
         if key == "dashboard":
             from .pages.dashboard import DashboardPage
-            return DashboardPage(self._user, navigate_cb=self._navigate)
+            return DashboardPage(self._user, navigate_cb=self._navigate,
+                                 run_state=self.run_state)
 
         if key == "seebeck":
             from .pages.seebeck_page import SeebeckPage
@@ -121,18 +114,19 @@ class MainWindow(QMainWindow):
             from .pages.users_page import UsersPage
             return UsersPage(self._user)
 
+        if key == "audit" and role in ("super_admin", "lab_admin"):
+            from .pages.audit_page import AuditPage
+            return AuditPage(self._user)
+
         if key == "settings":
             from .pages.settings_page import SettingsPage
-            return SettingsPage(self._user)
+            page = SettingsPage(self._user)
+            if hasattr(page, "config_saved"):
+                page.config_saved.connect(self.footer.refresh_safety)
+            return page
 
-        # Fallback placeholder
-        placeholder = QWidget()
-        lbl = QLabel(f"{PAGE_TITLES.get(key, key)}\n\nComing soon.")
-        lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        lbl.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 15px;")
-        layout = QVBoxLayout(placeholder)
-        layout.addWidget(lbl)
-        return placeholder
+        return EmptyState("lock", PAGE_TITLES.get(key, key),
+                          "You do not have access to this page.")
 
     # ------------------------------------------------------------------
     # Navigation
@@ -141,8 +135,11 @@ class MainWindow(QMainWindow):
     def _navigate(self, key: str):
         page = self._get_page(key)
         self.stack.setCurrentWidget(page)
-        self.header.set_title(PAGE_TITLES.get(key, key))
+        self.header.set_title(PAGE_TITLES.get(key, LABEL_OF.get(key, key)),
+                              SECTION_OF.get(key, ""))
         self.sidebar.set_active(key)
+        if hasattr(page, "on_shown"):
+            page.on_shown()
 
     # ------------------------------------------------------------------
     # Logout
@@ -152,8 +149,8 @@ class MainWindow(QMainWindow):
         if not self._stop_running_measurements("Signing out"):
             return
         reply = QMessageBox.question(
-            self, "Sign Out",
-            "Are you sure you want to sign out?",
+            self, "Sign out",
+            "Sign out of TE Measurement?",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
         )
         if reply != QMessageBox.StandardButton.Yes:

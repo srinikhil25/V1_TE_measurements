@@ -1,68 +1,67 @@
 """
-Seebeck Measurement page — cockpit layout.
+Seebeck measurement — live run console.
 
-Top: phase bar (geometry chooser · Start/Stop/Reset · segmented progress).
-Below: a 4-column grid of tiles —
-    Params (on-graph waveform + sample/cooling)  |  G1 live chart  |  IR camera
-                                                 |  G2 · G3        |
-                                                 |  Data table     |
-Every tile has an enlarge button that expands it to fill the whole grid.
+Toolbar   : title / run summary · phase stepper · Reset · Start / Stop
+Left      : run setup (sample, geometry) · heater profile · safety · event log
+Centre    : live readouts · T/TEMF vs time · TEMF vs ΔT · S vs T₀ · data table
+Right     : Seebeck by T₀ bin · thermal camera   (toggle from the toolbar)
+
+Every chart / table tile can be enlarged to fill the centre area.
 """
 
-from typing import List, Dict, Optional
-
-from PyQt6.QtWidgets import (
-    QWidget, QHBoxLayout, QVBoxLayout, QLabel, QPushButton,
-    QFrame, QLineEdit, QGridLayout, QMessageBox, QButtonGroup,
-    QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView,
-    QFileDialog, QDoubleSpinBox, QScrollArea,
-)
-from PyQt6.QtCore import Qt, QTimer, QSize
+from __future__ import annotations
 
 import os
 import tempfile
+import time
+from typing import Dict, List, Optional
 
 import pyqtgraph as pg
 from openpyxl import Workbook
 from openpyxl.drawing.image import Image as XLImage
-
-from ..theme import (
-    CARD_BG, BORDER, CONTENT_BG, PRIMARY, PRIMARY_HOVER,
-    TEXT_PRIMARY, TEXT_SECONDARY, TEXT_MUTED,
-    SUCCESS, SUCCESS_BG, ERROR, ERROR_BG,
+from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtWidgets import (
+    QFileDialog, QFrame, QGridLayout, QHBoxLayout, QLineEdit, QListWidget,
+    QListWidgetItem, QMessageBox, QScrollArea, QVBoxLayout, QWidget,
 )
-from ..icons import icon as _icon
-from ..widgets.measurement_setup_dialog import MeasurementSetupDialog
-from ..widgets.ir_camera_widget import IrCameraWidget
-from ..widgets.tile import Tile
 
-# ---------------------------------------------------------------------------
-# Phase badge colours  (bg, border/text colour, display label)
-# ---------------------------------------------------------------------------
-PHASE_STYLE = {
-    "pre":          ("#FFF7ED", "#EA580C", "PRE-HEAT"),
-    "ramp_up":      ("#EEF2FF", "#4F46E5", "POWER UP"),
-    "hold":         (SUCCESS_BG, SUCCESS,   "HOLD"),
-    "ramp_down":    ("#FFF7ED", "#EA580C",  "POWER DOWN"),
-    "cooling_tail": ("#F0F9FF", "#0284C7",  "COOLING"),
-    "idle":         ("#FBFAF5", TEXT_MUTED, "IDLE"),
-    "finished":     (SUCCESS_BG, SUCCESS,   "FINISHED"),
-    "error":        (ERROR_BG,  ERROR,      "ERROR"),
+from .. import theme as T
+from ..widgets.ir_camera_widget import IrCameraWidget
+from ..widgets.measurement_setup_dialog import MeasurementSetupDialog
+from ..widgets.profile_preview import ProfilePreview, fmt_duration, profile_duration_s
+from ..widgets.tile import Tile, icon_button
+from ..widgets.ui_kit import (
+    Chip, KeyValueList, LegendStrip, Panel, Readout, ReadoutGrid, Segmented, Stepper,
+    button, cell, field, label, make_table, page_scaffold, pen, set_props, style_plot,
+)
+
+# Phase vocabulary: key → (display name, chip kind)
+PHASES = {
+    "idle":         ("Ready", "neutral"),
+    "pre":          ("Pre-heat", "info"),
+    "ramp_up":      ("Power up", "info"),
+    "hold":         ("Hold", "info"),
+    "ramp_down":    ("Power down", "info"),
+    "cooling_tail": ("Cooling", "info"),
+    "finished":     ("Finished", "success"),
+    "error":        ("Stopped on error", "danger"),
 }
+# Kept for older imports.
+PHASE_STYLE = {k: ("", "", v[0].upper()) for k, v in PHASES.items()}
 
 # Segmented progress: (phase key, display label). Order matters.
 _SEGMENTS = [
-    ("pre",          "PRE"),
-    ("ramp_up",      "INC RATE"),
-    ("hold",         "HOLD"),
-    ("ramp_down",    "DEC RATE"),
-    ("cooling_tail", "COOLING"),
+    ("pre",          "Pre-heat"),
+    ("ramp_up",      "Power up"),
+    ("hold",         "Hold"),
+    ("ramp_down",    "Power down"),
+    ("cooling_tail", "Cooling"),
 ]
 
 # Data-table column definitions  (data-dict key, display header, format string)
 _TABLE_COLS: List[tuple] = [
     ("Time [s]",        "Time [s]",  "{:.1f}"),
-    ("TEMF [mV]",       "TEMF [mV]", "{:.3f}"),
+    ("TEMF [mV]",       "TEMF [mV]", "{:.4f}"),
     ("Temp1 [oC]",      "T₁ [°C]",   "{:.2f}"),
     ("Temp2 [oC]",      "T₂ [°C]",   "{:.2f}"),
     ("Delta Temp [oC]", "ΔT [°C]",   "{:.2f}"),
@@ -74,20 +73,24 @@ _TABLE_COLS: List[tuple] = [
     ("Heater I [A]",    "Heater [A]", "{:.3f}"),
 ]
 
+_GEOMETRY = (("in_plane", "In-plane"), ("out_plane", "Out-of-plane"))
 
-# ---------------------------------------------------------------------------
-# Seebeck page
-# ---------------------------------------------------------------------------
 
 class SeebeckPage(QWidget):
 
-    # Default heater profile (used until the operator configures one via the
-    # New Measurement dialog).
+    # Default heater profile (used until the operator edits it).
     _DEFAULT_PROFILE = {
         "interval": 2, "pre_time": 5, "hold_time": 600,
         "start_volt": 0.0, "stop_volt": 1.0,
         "inc_rate": 1.0, "dec_rate": 1.0, "pk160_current_unit": "mA",
     }
+
+    # Per-geometry current cap (amperes): In-Plane 1.0 A · Out-Plane 1.3 A
+    CURRENT_CAP_A = {"in_plane": 1.0, "out_plane": 1.3}
+
+    # Secondary columns shown only when the data tile is enlarged
+    # (ΔT/T₀ · T₀[°C] · T₀[K]).
+    _SECONDARY_COLS = (5, 6, 7)
 
     def __init__(self, user):
         super().__init__()
@@ -95,193 +98,220 @@ class SeebeckPage(QWidget):
         self._data: List[Dict] = []
         self._analysis: List[Dict] = []
         self._table_row_count: int = 0
-
-        # Heater profile is now configured in a fixed-size dialog (New
-        # Measurement), not an always-on tile. The page holds the last config.
         self._profile_params: Dict = dict(self._DEFAULT_PROFILE)
         self._cooling_target: float = 5.0
-
         self._tiles: Dict[str, Tile] = {}
         self._grid_positions: Dict[str, tuple] = {}
         self._enlarged: Optional[Tile] = None
+        self._last_phase: Optional[str] = None
+        self._last_invalid = 0
+        self._last_db_warning = None
+        self._run_id = None
+        self._auto_hid_side = False
 
         self._timer = QTimer()
         self._timer.setInterval(1000)
         self._timer.timeout.connect(self._poll)
 
+        try:
+            from ...core.config import get_config
+            h = get_config().heater
+            self.CURRENT_CAP_A = {"in_plane": h.in_plane.current_max_A,
+                                  "out_plane": h.out_plane.current_max_A}
+        except Exception:
+            pass
+
+        pg.setConfigOptions(antialias=True)
         self._build_ui()
+        self._refresh_profile_panel()
+        self._log("Ready. Set the sample ID and heater profile, then press Start.")
 
     # ==================================================================
     # UI construction
     # ==================================================================
 
     def _build_ui(self):
-        self.setStyleSheet(f"background: {CONTENT_BG};")
-        root = QVBoxLayout(self)
-        root.setContentsMargins(14, 14, 14, 14)
-        root.setSpacing(14)
+        tb, body = page_scaffold(self, "Seebeck measurement",
+                                 "Ready · no run in progress", margins=12, spacing=12)
+        self.toolbar = tb
+        self.stepper = Stepper([s for _k, s in _SEGMENTS])
+        self.stepper.setMinimumWidth(460)
+        self.stepper.setMaximumWidth(620)
+        tb.add_middle(18)
+        tb.add_middle(self.stepper)
 
-        root.addWidget(self._build_phase_bar())
+        self.btn_side = button("", "ghost", icon="panel-right", checkable=True,
+                               tooltip="Show / hide the results and thermal camera column")
+        self.btn_side.setChecked(True)
+        self.btn_side.toggled.connect(self._set_side_visible)
+        self.btn_reset = button("Reset", icon="rotate",
+                                tooltip="Clear the screen and release all instruments")
+        self.btn_reset.clicked.connect(self._reset)
+        self.btn_start = button("Start run", "primary", icon="play")
+        self.btn_start.clicked.connect(self._start)
+        self.btn_stop = button("Stop run", "danger", icon="stop",
+                               tooltip="Stop the run and switch the heater output off. "
+                                       "Data measured so far is kept.")
+        self.btn_stop.clicked.connect(self._stop)
+        self.btn_stop.setVisible(False)
+        tb.add_action(self.btn_side)
+        tb.add_action(self.btn_reset)
+        tb.add_action(self.btn_start)
+        tb.add_action(self.btn_stop)
+
+        row = QHBoxLayout()
+        row.setSpacing(12)
+        row.addWidget(self._build_left(), 0)
+        row.addWidget(self._build_centre(), 1)
+        self.side = self._build_right()
+        row.addWidget(self.side, 0)
+        body.addLayout(row, 1)
+
+    # ── Left column ───────────────────────────────────────────────────
+    def _build_left(self) -> QWidget:
+        sa = QScrollArea()
+        sa.setWidgetResizable(True)
+        sa.setFrameShape(QFrame.Shape.NoFrame)
+        sa.setFixedWidth(292)
+        sa.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        host = QWidget()
+        v = QVBoxLayout(host)
+        v.setContentsMargins(0, 0, 4, 0)
+        v.setSpacing(12)
+
+        # Run setup
+        setup = Panel("Run setup")
+        self.inp_sample = QLineEdit()
+        self.inp_sample.setPlaceholderText("e.g. Bi2Te3-001")
+        self.inp_sample.textEdited.connect(lambda _t: set_props(self.inp_sample, invalid=False))
+        setup.body.addWidget(field("Sample ID", self.inp_sample))
+        self.seg_geometry = Segmented([g[1] for g in _GEOMETRY])
+        self.seg_geometry.currentIndexChanged.connect(self._on_geometry_changed)
+        self.lbl_geom_hint = label("", "caption", wrap=True)
+        setup.body.addWidget(field("Geometry", self.seg_geometry))
+        setup.body.addWidget(self.lbl_geom_hint)
+        op = label(f"Operator: {getattr(self._user, 'username', '—')}", "caption")
+        setup.body.addWidget(op)
+        v.addWidget(setup)
+
+        # Heater profile
+        prof = Panel("Heater profile")
+        self.btn_edit_profile = button("Edit…", size="sm", icon="edit")
+        self.btn_edit_profile.clicked.connect(self._new_measurement)
+        prof.add_action(self.btn_edit_profile)
+        self.profile_preview = ProfilePreview()
+        prof.body.addWidget(self.profile_preview)
+        self.kv_profile = KeyValueList(mono_values=True, key_width=96)
+        prof.body.addWidget(self.kv_profile)
+        self.lbl_profile_lock = label("Locked while the run is in progress.", "caption")
+        self.lbl_profile_lock.setVisible(False)
+        prof.body.addWidget(self.lbl_profile_lock)
+        v.addWidget(prof)
+
+        # Safety
+        safe = Panel("Safety")
+        self.kv_safety = KeyValueList(mono_values=True, key_width=120)
+        safe.body.addWidget(self.kv_safety)
+        safe.body.addWidget(label("Software limits: the heater is switched off when one is "
+                                  "exceeded. Change them in Settings.", "caption", wrap=True))
+        v.addWidget(safe)
+        self._refresh_safety_panel()
+
+        # Event log
+        logp = Panel("Event log", flush=True)
+        self.lst_log = QListWidget()
+        self.lst_log.setProperty("flat", True)
+        self.lst_log.setWordWrap(True)
+        self.lst_log.setMinimumHeight(150)
+        self.lst_log.setSelectionMode(QListWidget.SelectionMode.NoSelection)
+        logp.body.addWidget(self.lst_log)
+        v.addWidget(logp, 1)
+
+        sa.setWidget(host)
+        self._on_geometry_changed(0)
+        return sa
+
+    # ── Centre column ─────────────────────────────────────────────────
+    def _build_centre(self) -> QWidget:
+        host = QWidget()
+        v = QVBoxLayout(host)
+        v.setContentsMargins(0, 0, 0, 0)
+        v.setSpacing(12)
+
+        self.ro = {
+            "t1":   Readout("T₁ hot side", "°C"),
+            "t2":   Readout("T₂ cold side", "°C"),
+            "dt":   Readout("ΔT", "K"),
+            "t0":   Readout("T₀ mean", "K"),
+            "temf": Readout("TEMF", "mV"),
+            "s":    Readout("S (point)", "µV/K", tone="accent",
+                            tooltip="Point-wise S of the latest reading. The fitted S "
+                                    "per T₀ bin is in the results column."),
+            "heat": Readout("Heater", "V"),
+            "grad": Readout("ΔT / T₀", "%",
+                            tooltip="Large gradients (> 10 %) make S less accurate."),
+        }
+        self.readouts = ReadoutGrid(list(self.ro.values()), 4)
+        v.addWidget(self.readouts)
 
         self._grid_host = QWidget()
         self._grid = QGridLayout(self._grid_host)
         self._grid.setContentsMargins(0, 0, 0, 0)
-        self._grid.setSpacing(14)
+        self._grid.setSpacing(12)
         self._build_tiles()
         self._layout_grid_normal()
-        root.addWidget(self._grid_host, 1)
+        v.addWidget(self._grid_host, 1)
+        return host
 
-    # ------------------------------------------------------------------
-    # Phase bar
-    # ------------------------------------------------------------------
-
-    def _build_phase_bar(self) -> QFrame:
-        bar = QFrame()
-        bar.setObjectName("card")
-        bar.setStyleSheet(
-            f"QFrame#card {{ background: {CARD_BG}; border: 1px solid {BORDER}; "
-            f"border-radius: 10px; }}"
-        )
-        v = QVBoxLayout(bar)
-        v.setContentsMargins(18, 14, 18, 14)
+    # ── Right column ──────────────────────────────────────────────────
+    def _build_right(self) -> QWidget:
+        host = QWidget()
+        host.setFixedWidth(330)
+        v = QVBoxLayout(host)
+        v.setContentsMargins(0, 0, 0, 0)
         v.setSpacing(12)
 
-        # ── Top row: badge + step info  ·····  geometry + buttons ────────
-        top = QHBoxLayout()
-        top.setSpacing(12)
+        res = Panel("Seebeck by T₀ bin", flush=True)
+        self.chip_fit = Chip("No data", "neutral")
+        res.add_action(self.chip_fit)
+        self.tbl_bins = make_table(["T₀ [K]", "S [µV/K]", "± [µV/K]", "n"], row_height=28)
+        self.tbl_bins.setProperty("mono", True)
+        for i, w in enumerate((76, 86, 76)):
+            self.tbl_bins.setColumnWidth(i, w)
+        self.tbl_bins.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.tbl_bins.setMinimumHeight(150)
+        res.body.addWidget(self.tbl_bins)
+        res.show_footer(label("Linear fit of TEMF vs ΔT within each 10 K bin of T₀.", "caption", wrap=True))
+        v.addWidget(res, 2)
 
-        self.phase_badge = QLabel("IDLE")
-        self.phase_badge.setFixedHeight(26)
-        self.phase_badge.setMinimumWidth(96)
-        self.phase_badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._apply_phase("idle")
-        top.addWidget(self.phase_badge)
+        self._tiles["ir"] = self._make_ir_tile()
+        self._tiles["ir"].enlarge_btn.setVisible(False)
+        v.addWidget(self._tiles["ir"], 3)
+        return host
 
-        info_box = QWidget()
-        info = QVBoxLayout(info_box)
-        info.setContentsMargins(0, 0, 0, 0)
-        info.setSpacing(2)
-        info.setAlignment(Qt.AlignmentFlag.AlignVCenter)
-        self.lbl_phase_name = QLabel("Ready")
-        self.lbl_phase_name.setStyleSheet(
-            f"color: {TEXT_PRIMARY}; font-size: 14px; font-weight: 600;"
-        )
-        self.lbl_step = QLabel("")
-        self.lbl_step.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 11.5px;")
-        self.lbl_step.setVisible(False)   # only shown when there's step text
-        info.addWidget(self.lbl_phase_name)
-        info.addWidget(self.lbl_step)
-        top.addWidget(info_box, 0, Qt.AlignmentFlag.AlignVCenter)
+    def _set_side_visible(self, on: bool):
+        self.side.setVisible(on)
+        self._auto_hid_side = False
 
-        # New Measurement — the primary action. Solid, prominent.
-        self.btn_new = QPushButton("＋  New Measurement")
-        self.btn_new.setFixedHeight(38)
-        self.btn_new.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.btn_new.setStyleSheet(
-            f"QPushButton {{ background: {PRIMARY}; color: white; border: none; "
-            f"border-radius: 8px; padding: 0 22px; font-size: 13.5px; font-weight: 700; }}"
-            f"QPushButton:hover {{ background: {PRIMARY_HOVER}; }}"
-        )
-        self.btn_new.setIcon(_icon("plus", "#FFFFFF", 16, width=2.4))
-        self.btn_new.setIconSize(QSize(16, 16))
-        self.btn_new.setText("New Measurement")
-        self.btn_new.clicked.connect(self._new_measurement)   # ← was missing
-        top.addSpacing(10)
-        top.addWidget(self.btn_new)
-        top.addStretch()
+    def resizeEvent(self, e):
+        super().resizeEvent(e)
+        self._fit_side_column()
 
-        # Sample ID (operator is taken automatically from the logged-in user)
-        sample_box = QVBoxLayout()
-        sample_box.setSpacing(3)
-        sample_lbl = QLabel("Sample ID")
-        sample_lbl.setStyleSheet(
-            f"background: transparent; border: none; color: {TEXT_MUTED}; "
-            f"font-size: 10px; font-weight: 600; letter-spacing: 0.5px;"
-        )
-        self.inp_sample = QLineEdit()
-        self.inp_sample.setPlaceholderText("e.g. Bi2Te3-001")
-        self.inp_sample.setFixedHeight(34)
-        self.inp_sample.setFixedWidth(190)
-        sample_box.addWidget(sample_lbl)
-        sample_box.addWidget(self.inp_sample)
-        top.addLayout(sample_box)
-        top.addSpacing(6)
+    def showEvent(self, e):
+        super().showEvent(e)
+        self._fit_side_column()
 
-        # Geometry chooser
-        self.btn_inplane = QPushButton("In-Plane")
-        self.btn_outplane = QPushButton("Out-Plane")
-        self._mode_group = QButtonGroup(self)
-        self._mode_group.setExclusive(True)
-        for b in (self.btn_inplane, self.btn_outplane):
-            b.setCheckable(True)
-            b.setFixedHeight(34)
-            b.setCursor(Qt.CursorShape.PointingHandCursor)
-            self._mode_group.addButton(b)
-            b.toggled.connect(self._update_mode_styles)
-        self.btn_inplane.setChecked(True)
-        geo_box = QFrame()
-        geo_box.setStyleSheet(
-            f"background: #EFECE4; border: 1px solid {BORDER}; border-radius: 8px;"
-        )
-        geo_l = QHBoxLayout(geo_box)
-        geo_l.setContentsMargins(3, 3, 3, 3)
-        geo_l.setSpacing(3)
-        geo_l.addWidget(self.btn_inplane)
-        geo_l.addWidget(self.btn_outplane)
-        top.addWidget(geo_box)
-        self._update_mode_styles()
-
-        # Start / Stop / Reset
-        self.btn_start = QPushButton("▶  Start")
-        self.btn_start.setFixedHeight(36)
-        self.btn_start.setStyleSheet(
-            f"QPushButton {{ background: {PRIMARY}; color: white; border: none; "
-            f"border-radius: 8px; font-size: 13px; font-weight: 600; padding: 0 16px; }}"
-            f"QPushButton:hover {{ background: {PRIMARY_HOVER}; }}"
-            f"QPushButton:disabled {{ background: #BBD3D6; color: #8FB6BA; }}"
-        )
-        self.btn_start.clicked.connect(self._start)
-
-        self.btn_stop = QPushButton("■  Stop")
-        self.btn_stop.setFixedHeight(36)
-        self.btn_stop.setStyleSheet(
-            f"QPushButton {{ background: {ERROR}; color: white; border: none; "
-            f"border-radius: 8px; font-size: 13px; font-weight: 600; padding: 0 16px; }}"
-            f"QPushButton:hover {{ background: #883333; }}"
-        )
-        self.btn_stop.clicked.connect(self._stop)
-        self.btn_stop.setVisible(False)
-
-        self.btn_reset = QPushButton("Reset")
-        self.btn_reset.setFixedHeight(36)
-        self.btn_reset.setStyleSheet(
-            f"QPushButton {{ background: white; color: {TEXT_SECONDARY}; "
-            f"border: 1.5px solid {BORDER}; border-radius: 8px; "
-            f"font-size: 13px; font-weight: 600; padding: 0 16px; }}"
-            f"QPushButton:hover {{ border-color: {PRIMARY}; color: {PRIMARY}; }}"
-        )
-        self.btn_reset.clicked.connect(self._reset)
-
-        top.addWidget(self.btn_start)
-        top.addWidget(self.btn_stop)
-        top.addWidget(self.btn_reset)
-        v.addLayout(top)
-
-        # ── Segments row ─────────────────────────────────────────────────
-        seg_row = QHBoxLayout()
-        seg_row.setSpacing(6)
-        self._seg_labels: Dict[str, QLabel] = {}
-        stretches = {"pre": 1, "ramp_up": 2, "hold": 3, "ramp_down": 2, "cooling_tail": 1}
-        for key, label in _SEGMENTS:
-            seg = QLabel(label)
-            seg.setFixedHeight(28)
-            seg.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            self._seg_labels[key] = seg
-            seg_row.addWidget(seg, stretches[key])
-        v.addLayout(seg_row)
-        self._update_segments("idle")
-
-        return bar
+    def _fit_side_column(self):
+        # Narrow window: fold the right column away so the charts keep their width.
+        narrow = self.width() < 1180
+        if narrow and not self.side.isHidden() and self.btn_side.isChecked():
+            self.btn_side.blockSignals(True)
+            self.btn_side.setChecked(False)
+            self.btn_side.blockSignals(False)
+            self.side.setVisible(False)
+            self._auto_hid_side = True
+        elif not narrow and self._auto_hid_side:
+            self.btn_side.setChecked(True)
 
     # ------------------------------------------------------------------
     # Tiles
@@ -292,179 +322,99 @@ class SeebeckPage(QWidget):
         self._tiles["g2"] = self._make_temf_dt_tile()
         self._tiles["g3"] = self._make_s_t0_tile()
         self._tiles["data"] = self._make_data_tile()
-        self._tiles["ir"] = self._make_ir_tile()
-
-        for t in self._tiles.values():
-            t.enlarge_clicked.connect(self._toggle_enlarge)
-
-        # (row, col, rowspan, colspan) in the 3-col grid.
-        #   G1 live chart (wide top) | IR (full height right)
-        #   G2 · G3                  |
-        #   Data (wide bottom)       |
+        for key in ("g1", "g2", "g3", "data"):
+            self._tiles[key].enlarge_clicked.connect(self._toggle_enlarge)
+        # (row, col, rowspan, colspan) in the 2-column centre grid
         self._grid_positions = {
             "g1":   (0, 0, 1, 2),
             "g2":   (1, 0, 1, 1),
             "g3":   (1, 1, 1, 1),
             "data": (2, 0, 1, 2),
-            "ir":   (0, 2, 3, 1),
         }
 
     def _make_live_chart_tile(self) -> Tile:
-        tile = Tile("g1", "TEMF · T₁ / T₂  vs  Time", badge="G1")
-        btn = self._chart_export_btn(lambda: self._export_single_chart(self.chart_live, "live"))
-        tile.add_action(btn)
-        pg.setConfigOptions(antialias=True)
-        tile.body_layout.setContentsMargins(8, 8, 10, 8)
+        tile = Tile("g1", "Temperatures and TEMF vs time")
+        tile.add_action(icon_button("image", "Save this chart as PNG",
+                                    lambda: self._export_single_chart(self.chart_live, "live")))
+        tile.body_layout.setContentsMargins(8, 6, 8, 6)
         tile.body_layout.addWidget(self._build_live_chart())
         return tile
 
     def _make_temf_dt_tile(self) -> Tile:
-        tile = Tile("g2", "TEMF  vs  ΔT", badge="G2")
-        btn = self._chart_export_btn(lambda: self._export_single_chart(self.chart_temf_dt, "temf_vs_dt"))
-        tile.add_action(btn)
-
+        tile = Tile("g2", "TEMF vs ΔT")
+        tile.add_action(icon_button("image", "Save this chart as PNG",
+                                    lambda: self._export_single_chart(self.chart_temf_dt, "temf_vs_dt")))
         self.chart_temf_dt = pg.PlotWidget()
-        self._style_chart(self.chart_temf_dt, "TEMF (mV)", "ΔT (°C)")
-        self.chart_temf_dt.setMenuEnabled(False)
-        self.curve_heat = self.chart_temf_dt.plot(pen=pg.mkPen("#ED6C02", width=2))
-        self.curve_cool = self.chart_temf_dt.plot(pen=pg.mkPen("#2563EB", width=2))
-        legend = self._legend_strip([
-            ("#ED6C02", "Heating"),
-            ("#2563EB", "Cooling"),
-        ])
-        tile.body_layout.setContentsMargins(8, 8, 10, 8)
-        tile.body_layout.addWidget(self._wrap_with_legend(legend, self.chart_temf_dt))
+        style_plot(self.chart_temf_dt, "TEMF (mV)", "ΔT (K)")
+        self.curve_heat = self.chart_temf_dt.plot(pen=pen(T.SERIES_HEAT))
+        self.curve_cool = self.chart_temf_dt.plot(pen=pen(T.SERIES_COOL))
+        tile.body_layout.setContentsMargins(8, 6, 8, 6)
+        tile.body_layout.addWidget(LegendStrip([(T.SERIES_HEAT, "Heating"), (T.SERIES_COOL, "Cooling")]))
+        tile.body_layout.addWidget(self.chart_temf_dt, 1)
         return tile
 
     def _make_s_t0_tile(self) -> Tile:
-        tile = Tile("g3", "S  vs  T₀", badge="G3")
-        btn = self._chart_export_btn(lambda: self._export_single_chart(self.chart_s_t0, "seebeck_vs_t0"))
-        tile.add_action(btn)
-
+        tile = Tile("g3", "S vs T₀")
+        tile.add_action(icon_button("image", "Save this chart as PNG",
+                                    lambda: self._export_single_chart(self.chart_s_t0, "seebeck_vs_t0")))
         self.chart_s_t0 = pg.PlotWidget()
-        self._style_chart(self.chart_s_t0, "S (µV/K)", "T₀ (K)")
-        self.chart_s_t0.setMenuEnabled(False)
+        style_plot(self.chart_s_t0, "S (µV/K)", "T₀ (K)")
         self.curve_s = self.chart_s_t0.plot(
-            pen=pg.mkPen("#9C27B0", width=2),
-            symbol="o", symbolSize=5, symbolBrush="#9C27B0", symbolPen=None,
-        )
-        tile.body_layout.setContentsMargins(8, 8, 10, 8)
-        tile.body_layout.addWidget(self.chart_s_t0)
+            pen=pen("#C4B5FD", 1.2), symbol="o", symbolSize=4,
+            symbolBrush="#A78BFA", symbolPen=None)
+        self.scatter_bins = pg.ScatterPlotItem(size=9, pen=pg.mkPen(T.SURFACE, width=1.5),
+                                               brush=pg.mkBrush(T.SERIES_S))
+        self.err_bins = pg.ErrorBarItem(pen=pen(T.SERIES_S, 1.2), beam=4)
+        self.chart_s_t0.addItem(self.err_bins)
+        self.chart_s_t0.addItem(self.scatter_bins)
+        tile.body_layout.setContentsMargins(8, 6, 8, 6)
+        tile.body_layout.addWidget(LegendStrip([("#A78BFA", "Point-wise"), (T.SERIES_S, "Binned fit ± 1σ")],
+                                               kinds=["dot", "dot"]))
+        tile.body_layout.addWidget(self.chart_s_t0, 1)
         return tile
 
     def _make_data_tile(self) -> Tile:
-        tile = Tile("data", "Live Data Table", badge="Data")
-
-        btn_graphs = self._mini_btn("Save Graphs…")
+        tile = Tile("data", "Readings")
+        btn_graphs = button("Save graphs…", size="sm", icon="image")
         btn_graphs.clicked.connect(self._export_graphs)
-        btn_data = self._mini_btn("Save Data…", primary=True)
+        btn_data = button("Save data…", size="sm", icon="download")
         btn_data.clicked.connect(self._export_data)
         tile.add_action(btn_graphs)
         tile.add_action(btn_data)
 
         headers = [c[1] for c in _TABLE_COLS]
-        self.tbl_data = QTableWidget(0, len(headers))
-        self.tbl_data.setHorizontalHeaderLabels(headers)
-        self.tbl_data.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-        self.tbl_data.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-        self.tbl_data.setAlternatingRowColors(True)
-        self.tbl_data.verticalHeader().setVisible(False)
-        self.tbl_data.verticalHeader().setDefaultSectionSize(22)
-        self.tbl_data.horizontalHeader().setSectionResizeMode(
-            QHeaderView.ResizeMode.Stretch
-        )
-        self.tbl_data.horizontalHeader().setMinimumSectionSize(40)
-        self.tbl_data.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.tbl_data.setStyleSheet(
-            "QTableWidget { border: none; font-size: 11px; background: white; }"
-            "QTableWidget::item { padding: 1px 4px; }"
-        )
+        self.tbl_data = make_table(headers, row_height=24, mono=True)
+        self.tbl_data.horizontalHeader().setDefaultAlignment(
+            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        from PyQt6.QtWidgets import QHeaderView
+        hh = self.tbl_data.horizontalHeader()
+        hh.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
+        hh.setStretchLastSection(True)
+        hh.setMinimumSectionSize(64)
+        self.tbl_data.setSelectionMode(self.tbl_data.SelectionMode.ExtendedSelection)
         tile.body_layout.addWidget(self.tbl_data)
-        self._set_table_full(False)   # compact: hide secondary columns
+        self._set_table_full(False)
         return tile
-
-    # Secondary columns shown only when the Data tile is enlarged
-    # (ΔT/T₀ · T₀[°C] · T₀[K]). Compact view keeps the 7 most-watched columns.
-    _SECONDARY_COLS = (5, 6, 7)
 
     def _set_table_full(self, full: bool):
         for col in self._SECONDARY_COLS:
             self.tbl_data.setColumnHidden(col, not full)
 
     def _make_ir_tile(self) -> Tile:
-        tile = Tile("ir", "Thermal Camera", badge="IR")
+        tile = Tile("ir", "Thermal camera")
         self.ir_camera = IrCameraWidget()
-        # The widget already draws its own card border; strip the duplicate.
-        self.ir_camera.setStyleSheet("QFrame#card { background: transparent; border: none; }")
-        tile.body_layout.setContentsMargins(6, 6, 6, 6)
+        tile.body_layout.setContentsMargins(0, 0, 0, 0)
         tile.body_layout.addWidget(self.ir_camera)
         return tile
-
-    # ------------------------------------------------------------------
-    # Small widget helpers
-    # ------------------------------------------------------------------
-
-    @staticmethod
-    def _labeled(text: str, widget: QWidget) -> QVBoxLayout:
-        box = QVBoxLayout()
-        box.setSpacing(4)
-        lbl = QLabel(text)
-        lbl.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 11.5px; font-weight: 500;")
-        box.addWidget(lbl)
-        box.addWidget(widget)
-        return box
-
-    @staticmethod
-    def _mini_btn(text: str, primary: bool = False) -> QPushButton:
-        b = QPushButton(text)
-        b.setFixedHeight(26)
-        b.setCursor(Qt.CursorShape.PointingHandCursor)
-        if primary:
-            b.setStyleSheet(
-                f"QPushButton {{ background: {PRIMARY}; color: white; border: none; "
-                f"border-radius: 5px; padding: 2px 10px; font-size: 11px; font-weight: 600; }}"
-                f"QPushButton:hover {{ background: {PRIMARY_HOVER}; }}"
-            )
-        else:
-            b.setStyleSheet(
-                f"QPushButton {{ background: white; color: {TEXT_SECONDARY}; "
-                f"border: 1px solid {BORDER}; border-radius: 5px; padding: 2px 10px; "
-                f"font-size: 11px; font-weight: 600; }}"
-                f"QPushButton:hover {{ color: {PRIMARY}; border-color: {PRIMARY}; }}"
-            )
-        return b
-
-    def _chart_export_btn(self, slot) -> QPushButton:
-        b = QPushButton()
-        b.setFixedSize(26, 26)
-        b.setToolTip("Export PNG")
-        b.setCursor(Qt.CursorShape.PointingHandCursor)
-        b.setIcon(_icon("download", TEXT_MUTED, 15))
-        b.setIconSize(QSize(15, 15))
-        b.setStyleSheet(
-            f"QPushButton {{ background: white; "
-            f"border: 1px solid {BORDER}; border-radius: 5px; }}"
-            f"QPushButton:hover {{ border-color: {PRIMARY}; }}"
-        )
-        b.clicked.connect(slot)
-        return b
 
     # ------------------------------------------------------------------
     # Chart builders
     # ------------------------------------------------------------------
 
-    def _build_live_chart(self) -> pg.PlotWidget:
+    def _build_live_chart(self) -> QWidget:
         chart = pg.PlotWidget()
-        # Swapped per request: Temperature on the LEFT axis, TEMF on the RIGHT.
-        self._style_chart(chart, "Temperature (°C)", "Time (s)")
-        chart.setMenuEnabled(False)
-
+        style_plot(chart, "Temperature (°C)", "Time (s)", right="TEMF (mV)")
         pi = chart.getPlotItem()
-        pi.setContentsMargins(10, 10, 10, 10)          # breathing room around the plot
-        pi.showAxis("right")
-        pi.setLabel("right", "TEMF (mV)")
-        pi.getAxis("right").setStyle(tickFont=pg.QtGui.QFont("Segoe UI", 9), tickTextOffset=6)
-        pi.getAxis("left").setStyle(tickTextOffset=6)
 
         # Secondary view box carries TEMF against the right axis.
         self._vb_temf = pg.ViewBox()
@@ -472,10 +422,9 @@ class SeebeckPage(QWidget):
         pi.getAxis("right").linkToView(self._vb_temf)
         self._vb_temf.setXLink(pi)
 
-        # Colours: TEMF green, T₁ red, T₂ blue.
-        self.curve_t1 = pi.plot(pen=pg.mkPen("#DC2626", width=2))    # T₁ red (left axis)
-        self.curve_t2 = pi.plot(pen=pg.mkPen("#2563EB", width=2))    # T₂ blue (left axis)
-        self.curve_temf = pg.PlotCurveItem(pen=pg.mkPen("#2CA02C", width=2))  # TEMF green (right)
+        self.curve_t1 = pi.plot(pen=pen(T.SERIES_T1))
+        self.curve_t2 = pi.plot(pen=pen(T.SERIES_T2))
+        self.curve_temf = pg.PlotCurveItem(pen=pen(T.SERIES_TEMF, 1.6, dashed=True))
         self._vb_temf.addItem(self.curve_temf)
 
         def _sync_views():
@@ -486,82 +435,41 @@ class SeebeckPage(QWidget):
         _sync_views()
 
         chart.setXRange(0, 60, padding=0)
-        chart.setYRange(0, 100, padding=0.05)          # left = Temperature
-        self._vb_temf.setYRange(-5, 5, padding=0.05)   # right = TEMF
-
+        chart.setYRange(0, 100, padding=0.05)
+        self._vb_temf.setYRange(-5, 5, padding=0.05)
         self.chart_live = chart
 
-        # Legend as a strip ABOVE the plot, off the data area (no overlap).
-        legend_row = self._legend_strip([
-            ("#2CA02C", "TEMF [mV]"),
-            ("#DC2626", "T₁ [°C]"),
-            ("#2563EB", "T₂ [°C]"),
-        ])
-        return self._wrap_with_legend(legend_row, chart)
-
-    @staticmethod
-    def _style_chart(chart: pg.PlotWidget, ylabel: str, xlabel: str):
-        chart.setBackground("white")
-        chart.showGrid(x=True, y=True, alpha=0.25)
-        chart.setLabel("left", ylabel)
-        chart.setLabel("bottom", xlabel)
-        chart.getAxis("left").setStyle(tickFont=pg.QtGui.QFont("Segoe UI", 9))
-        chart.getAxis("bottom").setStyle(tickFont=pg.QtGui.QFont("Segoe UI", 9))
+        box = QWidget()
+        v = QVBoxLayout(box)
+        v.setContentsMargins(0, 0, 0, 0)
+        v.setSpacing(2)
+        v.addWidget(LegendStrip([(T.SERIES_T1, "T₁ [°C]"), (T.SERIES_T2, "T₂ [°C]"),
+                                 (T.SERIES_TEMF, "TEMF [mV] · right axis")],
+                                kinds=["line", "line", "dash"]))
+        v.addWidget(chart, 1)
+        return box
 
     @staticmethod
     def _legend_strip(items) -> QWidget:
-        """Horizontal legend ABOVE a chart, off the plot area. items: (color, text)."""
-        row = QWidget()
-        lr = QHBoxLayout(row)
-        lr.setContentsMargins(10, 2, 10, 4)
-        lr.setSpacing(22)
-        for color, text in items:
-            w = QWidget()
-            h = QHBoxLayout(w)
-            h.setContentsMargins(0, 0, 0, 0)
-            h.setSpacing(6)
-            sw = QFrame()
-            sw.setFixedSize(18, 4)
-            sw.setStyleSheet(f"background:{color}; border:none; border-radius:2px;")
-            lb = QLabel(text)
-            lb.setStyleSheet(f"color:{TEXT_SECONDARY}; font-size:12px; border:none;")
-            h.addWidget(sw)
-            h.addWidget(lb)
-            lr.addWidget(w)
-        lr.addStretch()
-        return row
-
-    @staticmethod
-    def _wrap_with_legend(legend: QWidget, chart: QWidget) -> QWidget:
-        container = QWidget()
-        cv = QVBoxLayout(container)
-        cv.setContentsMargins(0, 0, 0, 0)
-        cv.setSpacing(2)
-        cv.addWidget(legend)
-        cv.addWidget(chart, stretch=1)
-        return container
+        """Legend above a chart. items: (color, text). Kept for older callers."""
+        return LegendStrip(items)
 
     # ==================================================================
     # Enlarge / restore
     # ==================================================================
 
     def _layout_grid_normal(self):
-        for name, tile in self._tiles.items():
+        for name in ("g1", "g2", "g3", "data"):
+            tile = self._tiles[name]
             self._grid.removeWidget(tile)
             tile.setVisible(True)
             r, c, rs, cs = self._grid_positions[name]
             self._grid.addWidget(tile, r, c, rs, cs)
-
-        # 3 columns: two flexible (charts/data), one fixed-ish for the IR view.
         self._grid.setColumnStretch(0, 1)
         self._grid.setColumnStretch(1, 1)
-        self._grid.setColumnStretch(2, 0)
-        self._grid.setColumnMinimumWidth(0, 0)
-        self._grid.setColumnMinimumWidth(1, 0)
-        self._grid.setColumnMinimumWidth(2, 380)
-        self._grid.setRowStretch(0, 23)
-        self._grid.setRowStretch(1, 20)
-        self._grid.setRowStretch(2, 20)
+        self._grid.setRowStretch(0, 26)
+        self._grid.setRowStretch(1, 22)
+        self._grid.setRowStretch(2, 16)
 
     def _toggle_enlarge(self, tile: Tile):
         if self._enlarged is tile:
@@ -572,18 +480,17 @@ class SeebeckPage(QWidget):
             self._enlarge(tile)
 
     def _enlarge(self, tile: Tile):
-        for name, t in self._tiles.items():
+        for name in ("g1", "g2", "g3", "data"):
+            t = self._tiles[name]
             self._grid.removeWidget(t)
             t.setVisible(t is tile)
-        for c in range(3):
+        for c in range(2):
             self._grid.setColumnStretch(c, 1 if c == 0 else 0)
-            self._grid.setColumnMinimumWidth(c, 0)
         for r in range(3):
             self._grid.setRowStretch(r, 1 if r == 0 else 0)
         self._grid.addWidget(tile, 0, 0, 1, 1)
         tile.set_enlarged(True)
         self._enlarged = tile
-        # Data tile: reveal the full column set when enlarged.
         if tile is self._tiles.get("data"):
             self._set_table_full(True)
 
@@ -595,34 +502,75 @@ class SeebeckPage(QWidget):
         self._layout_grid_normal()
 
     # ==================================================================
-    # Geometry chooser
+    # Setup panels
     # ==================================================================
 
-    _MODE_CHECKED = (
-        f"QPushButton {{ background: {PRIMARY}; color: white; border: none; "
-        f"border-radius: 6px; font-size: 12px; font-weight: 600; padding: 0 14px; }}"
-        f"QPushButton:disabled {{ background: #BBD3D6; color: #DCE9FB; }}"
-    )
-    _MODE_UNCHECKED = (
-        f"QPushButton {{ background: transparent; color: {TEXT_SECONDARY}; "
-        f"border: none; border-radius: 6px; font-size: 12px; font-weight: 600; padding: 0 14px; }}"
-        f"QPushButton:hover {{ color: {PRIMARY}; }}"
-        f"QPushButton:disabled {{ color: #C7C0B0; }}"
-    )
-
-    # Per-geometry current cap (amperes): In-Plane 1.0 A · Out-Plane 1.3 A
-    CURRENT_CAP_A = {"in_plane": 1.0, "out_plane": 1.3}
-
     def _current_mode(self) -> str:
-        return "in_plane" if self.btn_inplane.isChecked() else "out_plane"
+        return _GEOMETRY[max(self.seg_geometry.currentIndex(), 0)][0]
 
-    def _update_mode_styles(self):
-        for b in (self.btn_inplane, self.btn_outplane):
-            b.setStyleSheet(self._MODE_CHECKED if b.isChecked() else self._MODE_UNCHECKED)
+    def _on_geometry_changed(self, _idx: int):
+        mode = self._current_mode()
+        cap = self.CURRENT_CAP_A.get(mode)
+        if cap is not None:
+            self.lbl_geom_hint.setText(f"Heater current is limited to {cap:g} A in this geometry.")
+            unit = self._profile_params.get("pk160_current_unit", "mA")
+            cap_u = cap * (1000.0 if unit == "mA" else 1.0)
+            for k in ("start_volt", "stop_volt"):
+                if float(self._profile_params.get(k, 0)) > cap_u:
+                    self._profile_params[k] = cap_u
+            self._refresh_profile_panel()
 
     def _set_mode_enabled(self, enabled: bool):
-        self.btn_inplane.setEnabled(enabled)
-        self.btn_outplane.setEnabled(enabled)
+        self.seg_geometry.setEnabled(enabled)
+        self.inp_sample.setReadOnly(not enabled)
+        self.btn_edit_profile.setEnabled(enabled)
+        self.lbl_profile_lock.setVisible(not enabled)
+
+    def _refresh_profile_panel(self):
+        p = self._profile_params
+        u = p.get("pk160_current_unit", "mA")
+        self.profile_preview.set_params(p)
+        kv = self.kv_profile
+        kv.set("Current", f"{float(p['start_volt']):g} → {float(p['stop_volt']):g} {u}")
+        kv.set("Ramp up", f"{float(p['inc_rate']):g} {u}/s")
+        kv.set("Hold", fmt_duration(float(p["hold_time"])))
+        kv.set("Ramp down", f"{float(p['dec_rate']):g} {u}/s")
+        kv.set("Pre-heat", fmt_duration(float(p["pre_time"])))
+        kv.set("Sampling", f"every {int(p['interval'])} s")
+        kv.set("Cooling until", f"|ΔT| < {self._cooling_target:g} K")
+        kv.set("Duration", f"≈ {fmt_duration(profile_duration_s(p))} + cooling")
+
+    def _refresh_safety_panel(self):
+        try:
+            from ...core.config import get_config
+            cfg = get_config()
+            s = cfg.safety
+            self.kv_safety.set("Max temperature", f"{s.max_temperature_C:g} °C")
+            self.kv_safety.set("Max heating rate", f"{s.max_rise_rate_C_per_min:g} °C/min")
+            self.kv_safety.set("Invalid readings", f"abort after {int(s.max_consecutive_invalid_reads)}")
+            self.kv_safety.set("Open-TC detect", "on" if cfg.thermocouples.open_tc_detect else "off",
+                               tone=None if cfg.thermocouples.open_tc_detect else "warning")
+        except Exception:
+            self.kv_safety.set("Limits", "unavailable", tone="danger")
+
+    def on_shown(self):
+        if not self._timer.isActive():
+            self._refresh_safety_panel()
+
+    # ==================================================================
+    # Event log
+    # ==================================================================
+
+    def _log(self, text: str, kind: str = "info"):
+        stamp = time.strftime("%H:%M:%S")
+        it = QListWidgetItem(f"{stamp}   {text}")
+        color = {"warning": T.WARNING, "danger": T.DANGER, "success": T.SUCCESS}.get(kind)
+        if color:
+            from PyQt6.QtGui import QBrush, QColor
+            it.setForeground(QBrush(QColor(color)))
+        self.lst_log.insertItem(0, it)
+        while self.lst_log.count() > 200:
+            self.lst_log.takeItem(self.lst_log.count() - 1)
 
     # ==================================================================
     # Button-bar state
@@ -630,96 +578,66 @@ class SeebeckPage(QWidget):
 
     def _show_running_buttons(self):
         self.btn_reset.setVisible(False)
+        self.btn_start.setVisible(False)
         self.btn_stop.setVisible(True)
 
     def _show_idle_buttons(self):
         self.btn_stop.setVisible(False)
         self.btn_reset.setVisible(True)
+        self.btn_start.setVisible(True)
 
     # ==================================================================
-    # Start / Stop / Reset
+    # Profile / Start / Stop / Reset
     # ==================================================================
 
     def _new_measurement(self):
-        """Guard unsaved results, then open the fixed-size profile setup dialog."""
-        import logging, traceback
+        """Open the heater-profile editor (disabled while a run is active)."""
+        import logging
+        import traceback
         log = logging.getLogger("seebeck.new")
-        log.info(">>> New Measurement clicked")
         try:
             from ...services.measurement_service import SeebeckService
-            log.info("checking active run…")
             if SeebeckService().is_active():
-                log.info("run active — blocking")
-                QMessageBox.warning(
-                    self, "Measurement running",
-                    "A measurement is in progress. Stop it before starting a new one."
-                )
+                QMessageBox.warning(self, "Measurement running",
+                                    "The heater profile cannot be changed during a run.")
                 return
-
-            # If there are results on screen, offer to export before discarding.
-            log.info("data rows on screen: %d", len(self._data))
-            if self._data:
-                box = QMessageBox(self)
-                box.setIcon(QMessageBox.Icon.Question)
-                box.setWindowTitle("Start new measurement")
-                box.setText("You have measurement results on screen.")
-                box.setInformativeText("Save the data before starting a new run?")
-                save_btn = box.addButton("Save…", QMessageBox.ButtonRole.AcceptRole)
-                box.addButton("Discard & New", QMessageBox.ButtonRole.DestructiveRole)
-                cancel_btn = box.addButton("Cancel", QMessageBox.ButtonRole.RejectRole)
-                box.exec()
-                clicked = box.clickedButton()
-                if clicked is cancel_btn:
-                    return
-                if clicked is save_btn:
-                    self._export_data()
-
-            log.info("constructing MeasurementSetupDialog…")
             win = self.window()
             dlg = MeasurementSetupDialog(
                 self._profile_params, self._cooling_target,
                 self.CURRENT_CAP_A[self._current_mode()], win,
             )
-            log.info("dialog constructed; centering + showing")
             geo = dlg.frameGeometry()
             geo.moveCenter(win.frameGeometry().center())
             dlg.move(geo.topLeft())
-            dlg.show()
-            dlg.raise_()
-            dlg.activateWindow()
-            log.info("calling dialog.exec()")
-            result = dlg.exec()
-            log.info("dialog.exec() returned: %s", result)
-
-            if result:
+            if dlg.exec():
                 self._profile_params = dlg.get_profile_params()
                 self._cooling_target = dlg.get_cooling_target()
-                self._clear_results()
-                log.info("profile applied: %s", self._profile_params)
+                self._refresh_profile_panel()
+                self._log("Heater profile updated.")
         except Exception as e:
-            log.critical("New Measurement FAILED: %s\n%s", e, traceback.format_exc())
-            try:
-                QMessageBox.critical(self, "New Measurement",
-                                     f"Setup failed:\n{e}")
-            except Exception:
-                pass
+            log.critical("Profile editor failed: %s\n%s", e, traceback.format_exc())
+            QMessageBox.critical(self, "Heater profile", f"Could not open the editor:\n{e}")
+
+    _edit_profile = _new_measurement
 
     def _clear_results(self):
         """Wipe the on-screen data, charts and table for a fresh run."""
         self._data.clear()
         self._analysis.clear()
         self._table_row_count = 0
-        for curve in (
-            self.curve_temf, self.curve_t1, self.curve_t2,
-            self.curve_heat, self.curve_cool, self.curve_s,
-        ):
+        for curve in (self.curve_temf, self.curve_t1, self.curve_t2,
+                      self.curve_heat, self.curve_cool, self.curve_s):
             curve.setData([], [])
+        self.scatter_bins.setData([], [])
+        self.err_bins.setData(x=[], y=[], height=[])
         self.tbl_data.setRowCount(0)
+        self.tbl_bins.setRowCount(0)
+        self.chip_fit.set("No data", "neutral")
+        for r in self.ro.values():
+            r.set_value("—")
+            r.set_note("")
+            r.set_tone("accent" if r is self.ro["s"] else None)
         self._apply_phase("idle")
-        self.lbl_phase_name.setText("Ready")
-        self.lbl_step.setText("")
-        self.lbl_step.setVisible(False)
-        self._update_segments("idle")
 
     def _start(self):
         from ...services.measurement_service import SeebeckService
@@ -727,80 +645,73 @@ class SeebeckPage(QWidget):
         wp = self._profile_params
         if wp["start_volt"] >= wp["stop_volt"]:
             QMessageBox.warning(
-                self, "Invalid Parameters",
-                "I₀ (start current) must be less than I peak current.\n"
-                "Click 'New Measurement' to fix the heater profile."
-            )
+                self, "Heater profile",
+                "The start current I₀ must be lower than the peak current.\n"
+                "Use Edit… in the Heater profile panel to fix it.")
             return
+        sample = self.inp_sample.text().strip()
+        if not sample:
+            set_props(self.inp_sample, invalid=True)
+            reply = QMessageBox.question(
+                self, "No sample ID",
+                "No sample ID is entered. The run will be hard to find in the run library.\n\n"
+                "Start anyway?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No)
+            if reply != QMessageBox.StandardButton.Yes:
+                self.inp_sample.setFocus()
+                return
 
         params = {
             **wp,
-            "sample_id": self.inp_sample.text().strip() or None,
+            "sample_id": sample or None,
             "operator":  getattr(self._user, "username", None),
             "probe_mode": self._current_mode(),
             "cooling_target_delta_t": self._cooling_target,
         }
 
         if not SeebeckService().start(params):
-            QMessageBox.critical(self, "Error", "Failed to start measurement.")
+            QMessageBox.critical(self, "Start run", "The measurement could not be started.")
             return
 
-        # Reset charts and table
-        self._data.clear()
-        self._analysis.clear()
-        self._table_row_count = 0
-        for curve in (
-            self.curve_temf, self.curve_t1, self.curve_t2,
-            self.curve_heat, self.curve_cool, self.curve_s,
-        ):
-            curve.setData([], [])
-        self.tbl_data.setRowCount(0)
+        self._clear_results()
         self.chart_live.enableAutoRange()
         self._vb_temf.enableAutoRange()
         self.chart_temf_dt.enableAutoRange()
         self.chart_s_t0.enableAutoRange()
 
-        self.btn_start.setEnabled(False)
+        self._last_phase = None
+        self._last_invalid = 0
+        self._last_db_warning = None
+        self._run_id = None
         self._show_running_buttons()
         self._set_mode_enabled(False)
+        self._log(f"Run started · {sample or 'no sample ID'} · "
+                  f"{dict(_GEOMETRY)[self._current_mode()]}", "success")
+        self.toolbar.set_subtitle("Starting — connecting to the instruments…")
         self._timer.start()
 
     def _stop(self):
         from ...services.measurement_service import SeebeckService
         SeebeckService().stop()
         self._timer.stop()
-        self.btn_start.setEnabled(True)
         self._show_idle_buttons()
         self._set_mode_enabled(True)
         self._apply_phase("idle")
-        self.lbl_phase_name.setText("Ready")
-        self.lbl_step.setText("")
-        self.lbl_step.setVisible(False)
-        self._update_segments("idle")
+        self._log("Run stopped by the operator — heater output off.", "warning")
+        self.toolbar.set_subtitle(
+            f"Stopped · run #{self._run_id} kept in the run library" if self._run_id
+            else "Stopped")
 
     def _reset(self):
         from ...services.measurement_service import SeebeckService
         self._timer.stop()
         SeebeckService().reset()
-
-        self._data.clear()
-        self._analysis.clear()
-        self._table_row_count = 0
-        for curve in (
-            self.curve_temf, self.curve_t1, self.curve_t2,
-            self.curve_heat, self.curve_cool, self.curve_s,
-        ):
-            curve.setData([], [])
-        self.tbl_data.setRowCount(0)
-
-        self._apply_phase("idle")
-        self.lbl_phase_name.setText("Ready")
-        self.lbl_step.setText("")
-        self.lbl_step.setVisible(False)
-        self._update_segments("idle")
-        self.btn_start.setEnabled(True)
+        self._clear_results()
         self._show_idle_buttons()
         self._set_mode_enabled(True)
+        self.toolbar.set_subtitle("Ready · no run in progress")
+        self._log("Screen cleared and instruments released.")
 
     # ==================================================================
     # Polling
@@ -814,44 +725,59 @@ class SeebeckPage(QWidget):
         phase = status.get("phase") or "idle"
         run_ended = not svc.is_active()
         if run_ended:
-            phase = "error" if "error" in status.get("status", "") else "finished"
+            phase = "error" if "error" in (status.get("status") or "") else "finished"
             self._timer.stop()
-            self.btn_start.setEnabled(True)
             self._show_idle_buttons()
             self._set_mode_enabled(True)
 
+        if status.get("measurement_id"):
+            self._run_id = status["measurement_id"]
         self._apply_phase(phase)
-        self._update_segments(phase)
 
-        bg, color, label = PHASE_STYLE.get(phase, ("#FBFAF5", TEXT_MUTED, phase.upper()))
-        self.lbl_phase_name.setText(label.title())
+        if phase != self._last_phase and phase not in ("finished", "error"):
+            self._log(f"Phase: {PHASES.get(phase, (phase,))[0]}")
+        self._last_phase = phase
+
+        invalid = status.get("invalid_reads") or 0
+        if invalid > self._last_invalid:
+            self._log(f"{invalid} invalid thermocouple reading(s) so far — not used as data.",
+                      "warning")
+            self._last_invalid = invalid
+        if status.get("db_warning") and status["db_warning"] != self._last_db_warning:
+            self._last_db_warning = status["db_warning"]
+            self._log("NOT SAVED: " + str(status["db_warning"]), "danger")
 
         step = status.get("step", 0)
         total = status.get("total_steps", 0)
         remaining = status.get("estimated_remaining_s")
         parts = []
-        if total:
+        if self._run_id:
+            parts.append(f"Run #{self._run_id}")
+        parts.append(PHASES.get(phase, (phase.replace("_", " ").title(),))[0])
+        if total and not run_ended:
             parts.append(f"step {step} / {total}")
-        if remaining is not None:
-            parts.append(f"remaining {int(remaining)//60:02d}:{int(remaining)%60:02d}")
-        if status.get("invalid_reads"):
-            parts.append(f"⚠ {status['invalid_reads']} invalid TC reading(s)")
+        if remaining is not None and not run_ended:
+            parts.append(f"{int(remaining) // 60:02d}:{int(remaining) % 60:02d} remaining")
+        if invalid:
+            parts.append(f"{invalid} invalid reading(s)")
         if status.get("db_warning"):
-            parts.append("⚠ NOT SAVED")
-        text = "  ·  ".join(parts)
-        self.lbl_step.setText(text)
-        self.lbl_step.setVisible(bool(text))
+            parts.append("NOT SAVED")
+        self.toolbar.set_subtitle("  ·  ".join(parts))
 
         new_data = svc.get_data()
         if len(new_data) > len(self._data):
             self._data = new_data
             self._refresh_charts()
+            self._refresh_readouts(status)
 
         new_analysis = svc.get_analysis()
         if new_analysis and len(new_analysis) != len(self._analysis):
             self._analysis = new_analysis
+            self._refresh_bins()
 
         if run_ended:
+            if phase == "finished":
+                self._log("Run finished — heater output off. Saved to the run library.", "success")
             self._report_run_end(status)
 
     def _report_run_end(self, status: dict):
@@ -862,6 +788,7 @@ class SeebeckPage(QWidget):
             title = ("Safety abort — heater switched off"
                      if reason and reason.startswith("Safety abort") else "Measurement error")
             msg = reason or status.get("status")
+            self._log(f"{title}: {msg}", "danger")
             if db_warning:
                 msg += "\n\n" + db_warning
             QMessageBox.critical(self, title, msg)
@@ -871,6 +798,64 @@ class SeebeckPage(QWidget):
     # ------------------------------------------------------------------
     # Refresh
     # ------------------------------------------------------------------
+
+    def _refresh_readouts(self, status: dict):
+        if not self._data:
+            return
+        r = self._data[-1]
+
+        def put(key, val, fmt, note: str = ""):
+            ro = self.ro[key]
+            if val is None:
+                ro.set_value("—")
+                ro.set_tone("muted")
+            else:
+                ro.set_value(fmt.format(val))
+                ro.set_tone("accent" if key == "s" else None)
+            ro.set_note(note)
+
+        put("t1", r.get("Temp1 [oC]"), "{:.2f}")
+        put("t2", r.get("Temp2 [oC]"), "{:.2f}")
+        put("dt", r.get("Delta Temp [oC]"), "{:.2f}")
+        put("t0", r.get("T0 [K]"), "{:.1f}")
+        put("temf", r.get("TEMF [mV]"), "{:.4f}")
+        put("s", r.get("S [µV/K]"), "{:.1f}")
+        hv, hi = r.get("Heater V [V]"), r.get("Heater I [A]")
+        put("heat", hv, "{:.2f}", f"{hi:.3f} A" if hi is not None else "")
+        g = r.get("delta_T_over_T0")
+        put("grad", g * 100 if g is not None else None, "{:.2f}")
+        try:
+            from ...instruments.session_manager import LARGE_GRADIENT_RATIO
+        except Exception:
+            LARGE_GRADIENT_RATIO = 0.1
+        if g is not None and g > LARGE_GRADIENT_RATIO:
+            self.ro["grad"].set_tone("warning")
+            self.ro["grad"].set_note("large gradient")
+
+    def _refresh_bins(self):
+        rows = self._analysis
+        t = self.tbl_bins
+        t.setRowCount(len(rows))
+        xs, ys, es = [], [], []
+        for i, b in enumerate(rows):
+            unc = b.get("S_uncertainty_uV_per_K")
+            t.setItem(i, 0, cell(f"{b.get('T0_center_K', 0):.1f}", align="right", mono=True,
+                                 tooltip=f"{b.get('T0_min_K')}–{b.get('T0_max_K')} K"))
+            t.setItem(i, 1, cell(f"{b.get('S_uV_per_K', 0):.2f}", align="right", mono=True, bold=True))
+            t.setItem(i, 2, cell("—" if unc is None else f"{unc:.2f}", align="right", mono=True,
+                                 color=T.TEXT_SECONDARY))
+            t.setItem(i, 3, cell(str(b.get("n_points", "")), align="right", mono=True,
+                                 color=T.TEXT_SECONDARY))
+            if b.get("S_uV_per_K") is not None:
+                xs.append(b["T0_center_K"])
+                ys.append(b["S_uV_per_K"])
+                es.append(2 * (unc or 0.0))
+        self.scatter_bins.setData(xs, ys)
+        if xs:
+            import numpy as np
+            self.err_bins.setData(x=np.array(xs), y=np.array(ys), height=np.array(es))
+        self.chip_fit.set(f"{len(rows)} bin(s)" if rows else "No data",
+                          "info" if rows else "neutral")
 
     def _refresh_charts(self):
         if not self._data:
@@ -900,9 +885,7 @@ class SeebeckPage(QWidget):
 
         heating = [r for r in self._data if r.get("branch") != "cooling"]
         cooling = [r for r in self._data if r.get("branch") == "cooling"]
-        # Make cooling continue from the heating peak: prepend the last heating
-        # point so the cooling line starts where heating ended (at max ΔT) and
-        # traces back down, instead of detaching and starting from the left.
+        # Cooling continues from the heating peak (max ΔT) and traces back down.
         if heating and cooling:
             cooling = [heating[-1]] + cooling
         dt_h, tf_h = _xy(heating, "Delta Temp [oC]", "TEMF [mV]")
@@ -925,54 +908,36 @@ class SeebeckPage(QWidget):
             self.tbl_data.setRowCount(new_count)
             for i in range(self._table_row_count, new_count):
                 row = self._data[i]
+                invalid = row.get("valid") is False
                 for j, (key, _, fmt) in enumerate(_TABLE_COLS):
                     val = row.get(key)
                     text = "—" if val is None else fmt.format(val)
-                    item = QTableWidgetItem(text)
-                    item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-                    item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-                    self.tbl_data.setItem(i, j, item)
+                    it = cell(text, align="right",
+                              color=T.WARNING if invalid else None,
+                              tooltip=(row.get("flag") or "invalid reading") if invalid else "")
+                    self.tbl_data.setItem(i, j, it)
             self._table_row_count = new_count
             self.tbl_data.scrollToBottom()
+        self._tiles["data"].set_subtitle(f"{new_count} rows")
 
     # ------------------------------------------------------------------
-    # Phase badge + segments
+    # Phase indicator
     # ------------------------------------------------------------------
 
     def _apply_phase(self, phase: str):
-        bg, color, label = PHASE_STYLE.get(phase, ("#FBFAF5", TEXT_MUTED, phase.upper()))
-        self.phase_badge.setText(label)
-        self.phase_badge.setStyleSheet(
-            f"background: {bg}; color: {color}; font-size: 10px; font-weight: 700; "
-            f"letter-spacing: 1px; border: 1.5px solid {color}; border-radius: 13px; "
-            f"padding: 0 12px;"
-        )
+        keys = [k for k, _ in _SEGMENTS]
+        if phase in keys:
+            self.stepper.set_state(keys.index(phase))
+        elif phase == "finished":
+            self.stepper.set_state(-1, all_done=True)
+        elif phase == "error":
+            pass  # keep showing where it stopped
+        else:
+            self.stepper.set_state(-1)
+        self.profile_preview.set_active(phase if phase in keys else None)
 
     def _update_segments(self, phase: str):
-        keys = [k for k, _ in _SEGMENTS]
-        cur_idx = keys.index(phase) if phase in keys else -1
-        for i, key in enumerate(keys):
-            seg = self._seg_labels[key]
-            if cur_idx == -1:
-                # idle / finished / error → neutral
-                seg.setStyleSheet(self._seg_style("idle"))
-            elif i < cur_idx:
-                seg.setStyleSheet(self._seg_style("done"))
-            elif i == cur_idx:
-                seg.setStyleSheet(self._seg_style("current"))
-            else:
-                seg.setStyleSheet(self._seg_style("idle"))
-
-    @staticmethod
-    def _seg_style(state: str) -> str:
-        base = ("font-size: 10px; font-weight: 700; letter-spacing: 1px; "
-                "border-radius: 6px; padding: 0 6px;")
-        if state == "current":
-            return (f"{base} background: white; color: {PRIMARY}; "
-                    f"border: 1.5px solid {PRIMARY};")
-        if state == "done":
-            return f"{base} background: #E6EEEC; color: {PRIMARY}; border: 1px solid #C9DEE0;"
-        return f"{base} background: #EFECE4; color: {TEXT_MUTED}; border: 1px solid {BORDER};"
+        self._apply_phase(phase)
 
     # ==================================================================
     # Export
@@ -980,11 +945,10 @@ class SeebeckPage(QWidget):
 
     def _export_single_chart(self, widget: pg.PlotWidget, suffix: str):
         if not self._data:
-            QMessageBox.information(self, "Export", "No data available yet.")
+            QMessageBox.information(self, "Save chart", "There is no data to save yet.")
             return
         path, _ = QFileDialog.getSaveFileName(
-            self, "Save chart", f"seebeck_{suffix}.png", "PNG image (*.png)"
-        )
+            self, "Save chart", f"seebeck_{suffix}.png", "PNG image (*.png)")
         if not path:
             return
         if not path.lower().endswith(".png"):
@@ -992,15 +956,14 @@ class SeebeckPage(QWidget):
         pix = widget.grab()
         if not pix.isNull():
             pix.save(path, "PNG")
-            QMessageBox.information(self, "Export", f"Chart saved to:\n{path}")
+            QMessageBox.information(self, "Save chart", f"Chart saved to:\n{path}")
 
     def _export_graphs(self):
         if not self._data:
-            QMessageBox.information(self, "Export graphs", "No data available yet.")
+            QMessageBox.information(self, "Save graphs", "There is no data to save yet.")
             return
         base, _ = QFileDialog.getSaveFileName(
-            self, "Save graphs (base filename)", "seebeck_graphs", "PNG images (*.png)"
-        )
+            self, "Save graphs (base filename)", "seebeck_graphs", "PNG images (*.png)")
         if not base:
             return
         root, _ext = os.path.splitext(base)
@@ -1014,18 +977,16 @@ class SeebeckPage(QWidget):
             if not pix.isNull():
                 pix.save(path, "PNG")
         QMessageBox.information(
-            self, "Export graphs",
-            "Graphs saved as:\n" + "\n".join(os.path.basename(p) for _, p in targets),
-        )
+            self, "Save graphs",
+            "Graphs saved as:\n" + "\n".join(os.path.basename(p) for _, p in targets))
 
     def _export_data(self):
         if not self._data:
-            QMessageBox.information(self, "Export data", "No data available yet.")
+            QMessageBox.information(self, "Save data", "There is no data to save yet.")
             return
         path, selected_filter = QFileDialog.getSaveFileName(
             self, "Save data", "seebeck_data.xlsx",
-            "Excel workbook (*.xlsx);;CSV file (*.csv)",
-        )
+            "Excel workbook (*.xlsx);;CSV file (*.csv)")
         if not path:
             return
         if selected_filter.startswith("CSV") or path.lower().endswith(".csv"):
@@ -1045,10 +1006,8 @@ class SeebeckPage(QWidget):
             writer = csv.writer(f)
             writer.writerow(headers)
             for row in self._data:
-                writer.writerow(
-                    [row.get(k, "") if row.get(k) is not None else "" for k in keys]
-                )
-        QMessageBox.information(self, "Export data", f"CSV saved to:\n{path}")
+                writer.writerow([row.get(k, "") if row.get(k) is not None else "" for k in keys])
+        QMessageBox.information(self, "Save data", f"CSV saved to:\n{path}")
 
     def _export_excel_with_graphs(self, path: str):
         wb = Workbook()
@@ -1088,11 +1047,10 @@ class SeebeckPage(QWidget):
                 os.rmdir(tmpdir)
             except OSError:
                 pass
-            QMessageBox.information(self, "Export data", f"Excel workbook saved to:\n{path}")
+            QMessageBox.information(self, "Save data", f"Excel workbook saved to:\n{path}")
         except ImportError:
             wb.save(path)
             QMessageBox.warning(
-                self, "Export data",
+                self, "Save data",
                 "Excel file saved without embedded graphs.\n\n"
-                "To include graphs, install Pillow:\n  pip install pillow",
-            )
+                "To include graphs, install Pillow:\n  pip install pillow")

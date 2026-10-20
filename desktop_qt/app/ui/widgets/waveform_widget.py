@@ -42,19 +42,20 @@ _SH  = 26   # height
 # ── Label above each spinbox ───────────────────────────────────────────────
 _LH = 17    # label height
 _LF = QFont("Segoe UI", 8)
+_LF.setWeight(QFont.Weight.DemiBold)
 
-# ── Colour tokens (warm "quiet scientific" palette) ─────────────────────────
-_BG_CHART   = "#FBFAF5"
+# ── Colour tokens (instrument-console palette, see theme.py) ───────────────
+_BG_CHART   = "#F6F7F9"
 _BG_WIDGET  = "#FFFFFF"
-_C_GRID     = "#E6E1D6"
-_C_AXIS     = "#1E293B"
-_C_WAVE     = "#2F6F7A"
-_C_FILL1    = "#BBD3D6"   # fill top
-_C_FILL2    = "#E9F1F2"   # fill bottom
-_C_DASH     = "#8A8578"
-_C_ANN      = "#4B5563"   # annotation / bracket
-_C_LBL      = "#64748B"   # floating label text
-_C_TICK     = "#334155"
+_C_GRID     = "#E3E6EB"
+_C_AXIS     = "#4A5160"
+_C_WAVE     = "#1F5FBF"
+_C_FILL1    = "#C7D8F3"   # fill top
+_C_FILL2    = "#EEF3FB"   # fill bottom
+_C_DASH     = "#9AA3B0"
+_C_ANN      = "#4A5160"   # annotation / bracket
+_C_LBL      = "#4A5160"   # floating label text
+_C_TICK     = "#4A5160"
 
 # Minimum visual fraction for each segment (pre, ramp-up, hold, ramp-down)
 _MIN_F = [0.12, 0.15, 0.32, 0.15]
@@ -83,6 +84,10 @@ class SeebeckWaveformWidget(QWidget):
         pal.setColor(QPalette.ColorRole.Window, QColor(_BG_WIDGET))
         self.setPalette(pal)
         self.setAutoFillBackground(True)
+        # Compact on-diagram inputs (the global style is sized for forms).
+        self.setStyleSheet(
+            "QAbstractSpinBox, QComboBox { min-height: 0; padding: 0 6px; font-size: 12px; }"
+            "QComboBox { padding-right: 18px; }")
 
         self._build_inputs()
         for sb in self._spinboxes():
@@ -95,12 +100,16 @@ class SeebeckWaveformWidget(QWidget):
         def _dsb(lo, hi, val, dec=1, w=_SW):
             sb = QDoubleSpinBox(self)
             sb.setRange(lo, hi); sb.setValue(val); sb.setDecimals(dec)
+            sb.setButtonSymbols(QDoubleSpinBox.ButtonSymbols.NoButtons)
+            sb.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
             sb.setFixedSize(w, _SH)
             return sb
 
         def _isb(lo, hi, val, w=_SW):
             sb = QSpinBox(self)
             sb.setRange(lo, hi); sb.setValue(val)
+            sb.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons)
+            sb.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
             sb.setFixedSize(w, _SH)
             return sb
 
@@ -126,21 +135,6 @@ class SeebeckWaveformWidget(QWidget):
         self.cb_unit.setFixedSize(66, _SH)
         # Explicit light style — widget's custom QPalette would otherwise
         # propagate the dark sidebar palette into the popup view.
-        self.cb_unit.setStyleSheet(
-            "QComboBox {"
-            "  background: #FFFFFF; color: #0F172A;"
-            "  border: 1.5px solid #CBD5E1; border-radius: 5px;"
-            "  padding: 3px 6px;"
-            "}"
-            "QComboBox::drop-down { border: none; width: 18px; }"
-            "QComboBox QAbstractItemView {"
-            "  background: white; color: #0F172A;"
-            "  border: 1px solid #CBD5E1;"
-            "  selection-background-color: #EFF6FF;"
-            "  selection-color: #0F172A;"
-            "  outline: 0px;"
-            "}"
-        )
 
         # ── Labels ───────────────────────────────────
         self.lb_interval = _lbl("Interval")

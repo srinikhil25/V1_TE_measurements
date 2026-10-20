@@ -47,30 +47,51 @@ def _setup_file_logging() -> str:
     return str(log_path)
 
 
+def _install_signal_handlers(app) -> None:
+    """Ctrl+C / Ctrl+Break / console close → orderly quit (heater off via aboutToQuit).
+
+    Qt's event loop does not return to Python on its own, so a short timer lets
+    the interpreter run pending signal handlers. A force-kill (Task Manager,
+    power loss) cannot be caught — that is what the hardware interlock is for.
+    """
+    import signal
+    from PyQt6.QtCore import QTimer
+
+    def _quit(signum, _frame):
+        logging.getLogger("startup").warning("Signal %s received — shutting down", signum)
+        app.quit()
+
+    for name in ("SIGINT", "SIGTERM", "SIGBREAK"):
+        sig = getattr(signal, name, None)
+        if sig is not None:
+            try:
+                signal.signal(sig, _quit)
+            except (ValueError, OSError):
+                pass
+    timer = QTimer(app)
+    timer.timeout.connect(lambda: None)
+    timer.start(250)
+
+
 def main() -> None:
     from pathlib import Path  # noqa: F401  (kept for potential future use)
 
     log_path = _setup_file_logging()
 
     from PyQt6.QtWidgets import QApplication
-    from PyQt6.QtGui import QFont
 
     from app.core.database import init_db
     from app.ui.login_window import LoginWindow
-    from app.ui.theme import QSS
+    from app.ui.theme import apply_theme
 
     app = QApplication(sys.argv)
     app.setApplicationName("TE Measurement")
-    app.setApplicationVersion("1.0.0")
+    from app.version import APP_VERSION
+    app.setApplicationVersion(APP_VERSION)
     app.setOrganizationName("IkedaLab")
 
-    # Fusion style fully respects QSS — the default Windows style ignores
-    # background-color on QPushButton, making styled buttons invisible.
-    app.setStyle("Fusion")
-
-    font = QFont("Segoe UI", 10)
-    app.setFont(font)
-    app.setStyleSheet(QSS)
+    # Fusion style + palette + fonts + global style sheet (see app/ui/theme.py).
+    apply_theme(app)
 
     from PyQt6.QtCore import QLockFile
     from PyQt6.QtWidgets import QMessageBox
@@ -111,6 +132,14 @@ def main() -> None:
     # (window close is guarded by MainWindow.closeEvent with a confirmation).
     from app.services.measurement_service import stop_all_measurements
     app.aboutToQuit.connect(lambda: stop_all_measurements(timeout_s=30))
+    # Windows log-off / shutdown: stop runs before the session ends.
+    app.commitDataRequest.connect(lambda _mgr: stop_all_measurements(timeout_s=30))
+    _install_signal_handlers(app)
+
+    from app.core import audit
+    from app.version import APP_VERSION
+    audit.record("app_started", use_current_user=False,
+                 details={"version": APP_VERSION, "log": log_path})
 
     window = LoginWindow()
     window.show()

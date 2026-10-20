@@ -1,151 +1,160 @@
-"""Top header bar — sidebar toggle · page title · session timer · user · logout."""
+"""Top bar — navigation toggle · product · breadcrumb · run state · account menu."""
 
-from PyQt6.QtWidgets import QWidget, QHBoxLayout, QVBoxLayout, QLabel, QPushButton, QFrame
-from PyQt6.QtCore import pyqtSignal, Qt, QSize, QTimer, QElapsedTimer
+from PyQt6.QtCore import Qt, QSize, pyqtSignal
+from PyQt6.QtGui import QAction
+from PyQt6.QtWidgets import QFrame, QHBoxLayout, QLabel, QMenu, QPushButton, QWidget
 
-from ..theme import (
-    HEADER_BG, BORDER, TEXT_PRIMARY, TEXT_SECONDARY, TEXT_MUTED, ERROR,
-    CONTENT_BG, PRIMARY,
-)
+from .. import theme as T
 from ..icons import icon as _icon
-
-ROLE_LABELS = {
-    "super_admin": "Super Admin",
-    "lab_admin":   "Lab Admin",
-    "researcher":  "Researcher",
-}
+from .run_state import fmt_elapsed
+from .ui_kit import Dot, ROLE_LABELS, initials, set_props, vline
 
 
 class HeaderBar(QWidget):
     logout_requested = pyqtSignal()
-    sidebar_toggled  = pyqtSignal()
+    sidebar_toggled = pyqtSignal()
+    navigate_requested = pyqtSignal(str)
 
     def __init__(self, username: str, role: str = ""):
         super().__init__()
-        self._username  = username
-        self._role      = role
+        self._username = username
+        self._role = role
         self._collapsed = False
-        self.setObjectName("header_bar")
-        self.setFixedHeight(54)
-        self.setStyleSheet(
-            f"QWidget#header_bar {{ background-color: {HEADER_BG}; "
-            f"border-bottom: 1px solid {BORDER}; }}"
-        )
+        self.setObjectName("TopBar")
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.setFixedHeight(48)
         self._build()
 
-        # Session timer
-        self._elapsed = QElapsedTimer()
-        self._elapsed.start()
-        self._tick = QTimer(self)
-        self._tick.setInterval(1000)
-        self._tick.timeout.connect(self._update_session)
-        self._tick.start()
-        self._update_session()
-
     def _build(self):
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(10, 0, 16, 0)
-        layout.setSpacing(8)
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(8, 0, 12, 0)
+        lay.setSpacing(12)
 
-        # ── Sidebar toggle ────────────────────────────────────────────────
         self.btn_toggle = QPushButton()
-        self.btn_toggle.setFixedSize(36, 36)
-        self.btn_toggle.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.btn_toggle.setToolTip("Collapse sidebar  (Ctrl+\\)")
-        self.btn_toggle.setIcon(_icon("menu", TEXT_SECONDARY, 18))
+        self.btn_toggle.setObjectName("NavToggle")
+        self.btn_toggle.setIcon(_icon("menu", T.CHROME_TEXT_2, 18))
         self.btn_toggle.setIconSize(QSize(18, 18))
-        self.btn_toggle.setStyleSheet(self._toggle_btn_style())
+        self.btn_toggle.setToolTip("Collapse navigation  (Ctrl+\\)")
+        self.btn_toggle.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_toggle.clicked.connect(self._on_toggle)
-        layout.addWidget(self.btn_toggle)
-        layout.addSpacing(4)
+        lay.addWidget(self.btn_toggle)
 
-        # ── Page title ────────────────────────────────────────────────────
-        self.lbl_title = QLabel("Dashboard")
-        self.lbl_title.setStyleSheet(
-            f"color: {TEXT_PRIMARY}; font-size: 16px; font-weight: 600;"
-        )
-        layout.addWidget(self.lbl_title)
-        layout.addStretch()
+        badge = QLabel("TE")
+        badge.setFixedSize(26, 26)
+        badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        badge.setStyleSheet(
+            f"background: {T.ACCENT}; color: #FFFFFF; border-radius: 5px; "
+            f"font-family: '{T.mono_family()}'; font-weight: 700; font-size: 12px;")
+        lay.addWidget(badge)
+        brand = QLabel("TE Measurement")
+        brand.setObjectName("Brand")
+        lay.addWidget(brand)
 
-        # ── Session timer ─────────────────────────────────────────────────
-        sess = QHBoxLayout()
-        sess.setSpacing(6)
-        sess_lbl = QLabel("Session")
-        sess_lbl.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 12px;")
-        self.lbl_session = QLabel("00:00:00")
-        self.lbl_session.setStyleSheet(
-            f"color: {TEXT_PRIMARY}; font-size: 13px; font-weight: 600; "
-            f"font-family: 'Consolas', monospace;"
-        )
-        sess.addWidget(sess_lbl)
-        sess.addWidget(self.lbl_session)
-        layout.addLayout(sess)
-        layout.addSpacing(14)
+        sep = vline()
+        sep.setFixedHeight(20)
+        sep.setStyleSheet(f"background: {T.CHROME_BORDER};")
+        lay.addWidget(sep)
 
-        # ── User chip ─────────────────────────────────────────────────────
-        chip = QFrame()
-        chip.setStyleSheet(
-            f"QFrame {{ background: transparent; border: 1px solid {BORDER}; border-radius: 7px; }}"
-        )
-        cl = QHBoxLayout(chip)
-        cl.setContentsMargins(7, 4, 11, 4)
-        cl.setSpacing(9)
-        initials = ("".join(p[0] for p in self._username.split()[:2]).upper()
-                    or self._username[:2].upper())
-        avatar = QLabel(initials)
-        avatar.setFixedSize(26, 26)
-        avatar.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        avatar.setStyleSheet(
-            f"background: {PRIMARY}; color: white; border-radius: 13px; "
-            f"font-size: 10px; font-weight: 700;"
-        )
-        ucol = QVBoxLayout()
-        ucol.setSpacing(0)
-        u = QLabel(self._username)
-        u.setStyleSheet(f"background: transparent; border: none; color: {TEXT_PRIMARY}; font-size: 12px; font-weight: 600;")
-        r = QLabel(ROLE_LABELS.get(self._role, self._role))
-        r.setStyleSheet(f"background: transparent; border: none; color: {TEXT_MUTED}; font-size: 10px;")
-        ucol.addWidget(u)
-        if self._role:
-            ucol.addWidget(r)
-        cl.addWidget(avatar)
-        cl.addLayout(ucol)
-        layout.addWidget(chip)
+        self.lbl_section = QLabel("")
+        self.lbl_section.setProperty("role", "crumb")
+        self.lbl_slash = QLabel("/")
+        self.lbl_slash.setProperty("role", "crumb")
+        self.lbl_title = QLabel("Overview")
+        self.lbl_title.setProperty("role", "crumb-current")
+        lay.addWidget(self.lbl_section)
+        lay.addWidget(self.lbl_slash)
+        lay.addWidget(self.lbl_title)
+        lay.addStretch()
 
-        # ── Sign out ──────────────────────────────────────────────────────
-        btn_logout = QPushButton("Sign Out")
-        btn_logout.setCursor(Qt.CursorShape.PointingHandCursor)
-        btn_logout.setFixedHeight(32)
-        btn_logout.setStyleSheet(
-            f"QPushButton {{ background: {CONTENT_BG}; color: {TEXT_SECONDARY}; "
-            f"border: 1px solid {BORDER}; border-radius: 6px; padding: 0 12px; font-size: 12px; }}"
-            f"QPushButton:hover {{ color: {ERROR}; border-color: {ERROR}; background: white; }}"
-        )
-        btn_logout.clicked.connect(self.logout_requested)
-        layout.addWidget(btn_logout)
+        # Run-state pill
+        self.pill = QFrame()
+        self.pill.setObjectName("RunPill")
+        self.pill.setProperty("state", "idle")
+        pl = QHBoxLayout(self.pill)
+        pl.setContentsMargins(10, 4, 10, 4)
+        pl.setSpacing(8)
+        self.pill_dot = Dot(T.CHROME_MUTED, 8)
+        self.pill_text = QLabel("IDLE")
+        self.pill_text.setObjectName("RunPillText")
+        self.pill_time = QLabel("")
+        self.pill_time.setObjectName("RunPillTime")
+        self.pill_time.setVisible(False)
+        pl.addWidget(self.pill_dot)
+        pl.addWidget(self.pill_text)
+        pl.addWidget(self.pill_time)
+        self.pill.setToolTip("No measurement is running.")
+        self.pill.setFixedHeight(28)
+        lay.addWidget(self.pill, 0, Qt.AlignmentFlag.AlignVCenter)
+
+        # Account menu
+        self.btn_user = QPushButton()
+        self.btn_user.setCursor(Qt.CursorShape.PointingHandCursor)
+        ul = QHBoxLayout(self.btn_user)
+        ul.setContentsMargins(6, 0, 8, 0)
+        ul.setSpacing(8)
+        av = QLabel(initials(self._username))
+        av.setFixedSize(22, 22)
+        av.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        av.setStyleSheet(f"background: #2E3542; color: {T.CHROME_TEXT}; border-radius: 11px; "
+                         "font-size: 10px; font-weight: 700;")
+        nm = QLabel(self._username)
+        nm.setStyleSheet(f"color: {T.CHROME_TEXT}; font-size: 13px;")
+        chev = QLabel()
+        from ..icons import pixmap
+        chev.setPixmap(pixmap("chevron-down", T.CHROME_MUTED, 14))
+        for w in (av, nm, chev):
+            w.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+            ul.addWidget(w)
+        self.btn_user.setMinimumWidth(av.width() + nm.sizeHint().width() + 46)
+        menu = QMenu(self)
+        who = QAction(f"{self._username}  ·  {ROLE_LABELS.get(self._role, self._role)}", menu)
+        who.setEnabled(False)
+        menu.addAction(who)
+        menu.addSeparator()
+        act_settings = QAction(_icon("key", T.TEXT_SECONDARY, 16), "Change password…", menu)
+        act_settings.triggered.connect(lambda: self.navigate_requested.emit("settings"))
+        menu.addAction(act_settings)
+        menu.addSeparator()
+        act_out = QAction(_icon("logout", T.TEXT_SECONDARY, 16), "Sign out", menu)
+        act_out.triggered.connect(self.logout_requested)
+        menu.addAction(act_out)
+        self.btn_user.setMenu(menu)
+        lay.addWidget(self.btn_user)
 
     # ------------------------------------------------------------------
-    def _update_session(self):
-        secs = self._elapsed.elapsed() // 1000
-        h, rem = divmod(secs, 3600)
-        m, s = divmod(rem, 60)
-        self.lbl_session.setText(f"{h:02d}:{m:02d}:{s:02d}")
-
     def _on_toggle(self):
         self._collapsed = not self._collapsed
         self.btn_toggle.setToolTip(
-            "Expand sidebar  (Ctrl+\\)" if self._collapsed else "Collapse sidebar  (Ctrl+\\)"
-        )
+            "Expand navigation  (Ctrl+\\)" if self._collapsed else "Collapse navigation  (Ctrl+\\)")
         self.sidebar_toggled.emit()
 
-    def set_title(self, title: str):
+    def set_title(self, title: str, section: str = ""):
         self.lbl_title.setText(title)
+        self.lbl_section.setText(section)
+        self.lbl_section.setVisible(bool(section))
+        self.lbl_slash.setVisible(bool(section))
 
-    @staticmethod
-    def _toggle_btn_style() -> str:
-        return (
-            "QPushButton { background: #EFECE4; color: #1F2937; border: 1px solid #C7C0B0; "
-            "  border-radius: 7px; font-size: 17px; font-weight: 400; padding: 0; }"
-            "QPushButton:hover { background: #1E293B; color: white; border-color: #1E293B; }"
-            "QPushButton:pressed { background: #1F2937; color: white; border-color: #1F2937; }"
-        )
+    def set_run_state(self, st: dict):
+        if st.get("running"):
+            state = "running"
+            text = "RUNNING"
+            self.pill_dot.set_color(T.SUCCESS_LIVE)
+            self.pill_time.setText(fmt_elapsed(st.get("elapsed_s")))
+            self.pill_time.setVisible(True)
+            mid = st.get("measurement_id")
+            tip = st.get("label", "Measurement") + (f" · run #{mid}" if mid else "")
+            if st.get("phase"):
+                tip += f" · phase: {st['phase'].replace('_', ' ')}"
+            self.pill.setToolTip(tip)
+        else:
+            state = "idle"
+            text = "IDLE"
+            self.pill_dot.set_color(T.CHROME_MUTED)
+            self.pill_time.setVisible(False)
+            self.pill.setToolTip("No measurement is running.")
+        if self.pill_text.text() != text:
+            self.pill_text.setText(text)
+        if self.pill.property("state") != state:
+            set_props(self.pill, state=state)
+            set_props(self.pill_text)
+            set_props(self.pill_time)

@@ -1,281 +1,128 @@
-"""Left navigation sidebar — dark, role-filtered, collapsible.
+"""Navigation rail — dark, role-filtered, collapses to icons only."""
 
-Sections: brand · WORKSPACE nav · ADMIN nav · instrument status · user footer.
-"""
+from typing import Dict, List
 
-from typing import List, Tuple
-from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QPushButton,
-)
-from PyQt6.QtCore import Qt, QSize, pyqtSignal, QTimer, QPropertyAnimation, QEasingCurve, QParallelAnimationGroup
-from PyQt6.QtGui import QColor, QPalette, QPainter, QPen
+from PyQt6.QtCore import QEasingCurve, QParallelAnimationGroup, QPropertyAnimation, QSize, Qt, pyqtSignal
+from PyQt6.QtWidgets import QButtonGroup, QFrame, QLabel, QPushButton, QVBoxLayout, QWidget
 
-from ..icons import icon as _icon
+from .. import theme as T
+from ..icons import icon_states
 
-# (label, key, allowed-roles or None, section)  — icon name = key
+# (label, key, allowed roles or None, section)
 NAV_ITEMS: List[tuple] = [
-    ("Dashboard",       "dashboard", None,                                          "workspace"),
-    ("Seebeck",         "seebeck",   ("super_admin", "lab_admin", "researcher"),    "workspace"),
-    ("I-V Sweep",       "iv",        ("super_admin", "lab_admin", "researcher"),    "workspace"),
-    ("History",         "history",   ("super_admin", "lab_admin", "researcher"),    "workspace"),
-    ("User Management", "users",     ("super_admin",),                              "admin"),
-    ("Settings",        "settings",  None,                                          "admin"),
+    ("Overview",     "dashboard", None,                                       ""),
+    ("Seebeck",      "seebeck",   ("super_admin", "lab_admin", "researcher"), "Measure"),
+    ("I-V sweep",    "iv",        ("super_admin", "lab_admin", "researcher"), "Measure"),
+    ("Run library",  "history",   ("super_admin", "lab_admin", "researcher"), "Data"),
+    ("Audit trail",  "audit",     ("super_admin", "lab_admin"),               "Data"),
+    ("Users",        "users",     ("super_admin",),                           "System"),
+    ("Settings",     "settings",  None,                                       "System"),
 ]
 
-ROLE_LABELS = {
-    "super_admin": "Super Admin",
-    "lab_admin":   "Lab Admin",
-    "researcher":  "Researcher",
-}
-
-
-# Sidebar colour constants
-_BG     = "#1F242C"
-_HOVER  = "#2A2F38"
-_ACTIVE = "#2F6F7A"
-_TEXT   = "#EDEAE0"
-_MUTED  = "#A3A096"
-_DIV    = "#2D333C"
+SECTION_OF: Dict[str, str] = {key: section for _l, key, _r, section in NAV_ITEMS}
+LABEL_OF: Dict[str, str] = {key: lbl for lbl, key, _r, _s in NAV_ITEMS}
 
 
 class Sidebar(QWidget):
     page_requested = pyqtSignal(str)
 
-    def __init__(self, role: str, username: str):
+    EXPANDED_W = 208
+    COLLAPSED_W = 56
+
+    def __init__(self, role: str, username: str = ""):
         super().__init__()
-        self._role     = role
-        self._username = username
-        self._buttons: List[Tuple[str, QPushButton]] = []
-        self._dots: dict = {}
+        self._role = role
         self._expanded = True
-        self._EXPANDED_W  = 220
-        self._COLLAPSED_W = 0
-        self._anim_group: QParallelAnimationGroup | None = None
-
-        self.setFixedWidth(self._EXPANDED_W)
-        pal = self.palette()
-        pal.setColor(QPalette.ColorRole.Window, QColor(_BG))
-        self.setPalette(pal)
-        self.setAutoFillBackground(True)
-
+        self._buttons: Dict[str, QPushButton] = {}
+        self._labels: Dict[str, str] = {}
+        self._section_lbls: List[QLabel] = []
+        self._anim_group = None
+        self.setObjectName("NavRail")
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.setFixedWidth(self.EXPANDED_W)
+        self._group = QButtonGroup(self)
+        self._group.setExclusive(True)
         self._build()
-        QTimer.singleShot(900, self._poll_instruments)
+
+    def _build(self):
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(8, 12, 8, 12)
+        lay.setSpacing(2)
+        last = None
+        for text, key, roles, section in NAV_ITEMS:
+            if roles is not None and self._role not in roles:
+                continue
+            if section and section != last:
+                lay.addSpacing(10 if last is not None else 4)
+                s = QLabel(section.upper())
+                s.setProperty("role", "nav-section")
+                s.setFixedHeight(20)
+                self._section_lbls.append(s)
+                lay.addWidget(s)
+                last = section
+            elif last is None:
+                last = ""
+            b = QPushButton("  " + text)
+            b.setCheckable(True)
+            b.setCursor(Qt.CursorShape.PointingHandCursor)
+            b.setIcon(icon_states(key, T.CHROME_MUTED, "#FFFFFF", 16))
+            b.setIconSize(QSize(16, 16))
+            b.setToolTip(text)
+            b.clicked.connect(lambda _=False, k=key: self._on_nav(k))
+            self._group.addButton(b)
+            self._buttons[key] = b
+            self._labels[key] = text
+            lay.addWidget(b)
+        lay.addStretch()
+        div = QFrame()
+        div.setObjectName("NavDivider")
+        lay.addWidget(div)
+        lay.addSpacing(6)
+        self.foot = QLabel("Ikeda-Hamasaki Lab\nShizuoka University")
+        self.foot.setObjectName("NavFootText")
+        self.foot.setContentsMargins(10, 0, 0, 0)
+        lay.addWidget(self.foot)
 
     # ------------------------------------------------------------------
-    def toggle(self):
-        if (self._anim_group and
-                self._anim_group.state() == QParallelAnimationGroup.State.Running):
-            return
-        start_w = self._EXPANDED_W if self._expanded else self._COLLAPSED_W
-        end_w   = self._COLLAPSED_W if self._expanded else self._EXPANDED_W
+    def set_active(self, key: str):
+        b = self._buttons.get(key)
+        if b is not None:
+            b.setChecked(True)
 
-        def _anim(prop: bytes) -> QPropertyAnimation:
-            a = QPropertyAnimation(self, prop)
-            a.setDuration(220)
-            a.setEasingCurve(QEasingCurve.Type.InOutQuad)
-            a.setStartValue(start_w)
-            a.setEndValue(end_w)
-            return a
-
-        self._anim_group = QParallelAnimationGroup(self)
-        self._anim_group.addAnimation(_anim(b"minimumWidth"))
-        self._anim_group.addAnimation(_anim(b"maximumWidth"))
-        self._anim_group.start()
-        self._expanded = not self._expanded
+    def _on_nav(self, key: str):
+        self.page_requested.emit(key)
 
     @property
     def is_expanded(self) -> bool:
         return self._expanded
 
-    # ------------------------------------------------------------------
-    def _build(self):
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(0)
+    def toggle(self):
+        if self._anim_group and self._anim_group.state() == QParallelAnimationGroup.State.Running:
+            return
+        start = self.EXPANDED_W if self._expanded else self.COLLAPSED_W
+        end = self.COLLAPSED_W if self._expanded else self.EXPANDED_W
+        self._expanded = not self._expanded
+        if not self._expanded:
+            self._apply_labels()
 
-        # ── Brand ─────────────────────────────────────────────────────────
-        header = self._make_widget(_BG, fixed_h=70, border_bottom=_DIV)
-        hl = QHBoxLayout(header)
-        hl.setContentsMargins(16, 0, 16, 0)
-        hl.setSpacing(11)
+        def _anim(prop: bytes) -> QPropertyAnimation:
+            a = QPropertyAnimation(self, prop)
+            a.setDuration(180)
+            a.setEasingCurve(QEasingCurve.Type.InOutQuad)
+            a.setStartValue(start)
+            a.setEndValue(end)
+            return a
 
-        badge = QLabel("TE")
-        badge.setFixedSize(34, 34)
-        badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        badge.setStyleSheet(
-            f"background: {_ACTIVE}; color: white; "
-            f"border-radius: 8px; font-size: 12px; font-weight: 700;"
-        )
-        col = QVBoxLayout()
-        col.setSpacing(1)
-        t1 = QLabel("TE Measurement")
-        t1.setStyleSheet(f"background: transparent; color: {_TEXT}; font-size: 13px; font-weight: 600;")
-        t2 = QLabel("Ikeda-Hamasaki Lab")
-        t2.setStyleSheet(f"background: transparent; color: {_MUTED}; font-size: 10px;")
-        col.addWidget(t1)
-        col.addWidget(t2)
-        hl.addWidget(badge)
-        hl.addLayout(col)
-        hl.addStretch()
-        layout.addWidget(header)
-        layout.addSpacing(8)
+        self._anim_group = QParallelAnimationGroup(self)
+        self._anim_group.addAnimation(_anim(b"minimumWidth"))
+        self._anim_group.addAnimation(_anim(b"maximumWidth"))
+        if self._expanded:
+            self._anim_group.finished.connect(self._apply_labels)
+        self._anim_group.start()
 
-        # ── Nav (grouped by section) ──────────────────────────────────────
-        last_section = None
-        for label, key, roles, section in NAV_ITEMS:
-            if roles is not None and self._role not in roles:
-                continue
-            if section != last_section:
-                layout.addWidget(self._section_label(section.upper()))
-                last_section = section
-            layout.addWidget(self._nav_button(label, key))
-
-        layout.addStretch()
-
-        # ── Instrument status ─────────────────────────────────────────────
-        instr = self._make_widget(_BG, border_top=_DIV)
-        il = QVBoxLayout(instr)
-        il.setContentsMargins(18, 12, 18, 10)
-        il.setSpacing(8)
-        lbl = QLabel("INSTRUMENTS")
-        lbl.setStyleSheet(
-            f"background: transparent; color: {_MUTED}; font-size: 9.5px; "
-            f"font-weight: 700; letter-spacing: 1.2px;"
-        )
-        il.addWidget(lbl)
-        grid = QGridLayout()
-        grid.setHorizontalSpacing(14)
-        grid.setVerticalSpacing(6)
-        from ...services.instrument_scan import INSTRUMENTS
-        for i, (_key, name, _full, _role) in enumerate(INSTRUMENTS):
-            row = QHBoxLayout()
-            row.setSpacing(7)
-            dot = QLabel("●")
-            dot.setStyleSheet("background: transparent; color: #6B7280; font-size: 9px;")
-            self._dots[name] = dot
-            nm = QLabel(name)
-            nm.setStyleSheet(f"background: transparent; color: {_MUTED}; font-size: 11px;")
-            row.addWidget(dot)
-            row.addWidget(nm)
-            row.addStretch()
-            cell = QWidget()
-            cell.setStyleSheet("background: transparent;")
-            cell.setLayout(row)
-            grid.addWidget(cell, i // 2, i % 2)
-        il.addLayout(grid)
-        layout.addWidget(instr)
-
-        # ── User footer ───────────────────────────────────────────────────
-        footer = self._make_widget(_BG, border_top=_DIV)
-        fl = QHBoxLayout(footer)
-        fl.setContentsMargins(16, 12, 16, 16)
-        fl.setSpacing(10)
-
-        avatar = QLabel("".join([p[0] for p in self._username.split()[:2]]).upper()
-                        or self._username[:2].upper())
-        avatar.setFixedSize(32, 32)
-        avatar.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        avatar.setStyleSheet(
-            f"background: {_ACTIVE}; color: white; border-radius: 16px; "
-            f"font-size: 11px; font-weight: 700;"
-        )
-        ucol = QVBoxLayout()
-        ucol.setSpacing(1)
-        u_lbl = QLabel(self._username)
-        u_lbl.setStyleSheet(f"background: transparent; color: {_TEXT}; font-size: 12.5px; font-weight: 600;")
-        r_lbl = QLabel(ROLE_LABELS.get(self._role, self._role))
-        r_lbl.setStyleSheet(f"background: transparent; color: {_MUTED}; font-size: 10.5px;")
-        ucol.addWidget(u_lbl)
-        ucol.addWidget(r_lbl)
-        fl.addWidget(avatar)
-        fl.addLayout(ucol)
-        fl.addStretch()
-        layout.addWidget(footer)
-
-    # ------------------------------------------------------------------
-    def _section_label(self, text: str) -> QLabel:
-        lbl = QLabel(text)
-        lbl.setStyleSheet(
-            f"background: {_BG}; color: {_MUTED}; font-size: 9.5px; "
-            f"font-weight: 700; letter-spacing: 1.4px; padding: 10px 22px 4px;"
-        )
-        return lbl
-
-    def _nav_button(self, label: str, key: str) -> QPushButton:
-        btn = QPushButton("   " + label)
-        btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        btn.setFixedHeight(40)
-        btn.setIcon(_icon(key, _MUTED, 18))
-        btn.setIconSize(QSize(18, 18))
-        btn.setStyleSheet(self._inactive_style())
-        btn.clicked.connect(lambda _, k=key: self._on_nav(k))
-        self._buttons.append((key, btn))
-        return btn
-
-    # ------------------------------------------------------------------
-    def set_active(self, key: str):
-        for k, btn in self._buttons:
-            active = (k == key)
-            btn.setStyleSheet(self._active_style() if active else self._inactive_style())
-            # Recolour the icon to match the active/inactive text colour.
-            btn.setIcon(_icon(k, "#FFFFFF" if active else _MUTED, 18))
-
-    def _on_nav(self, key: str):
-        self.set_active(key)
-        self.page_requested.emit(key)
-
-    def _poll_instruments(self):
-        """Background check of which configured GPIB addresses are visible."""
-        from ...services.instrument_scan import start_resource_scan
-        start_resource_scan(self._on_scan)
-
-    def _on_scan(self, available):
-        from ...services.instrument_scan import instrument_addresses
-        for _key, name, _full, addr in instrument_addresses():
-            dot = self._dots.get(name)
-            if dot is None:
-                continue
-            if available is None:
-                color = "#6B7280"
-            else:
-                color = "#5BAD6E" if addr in available else "#C66262"
-            dot.setStyleSheet(f"background: transparent; font-size: 9px; color: {color};")
-
-    def paintEvent(self, event):
-        super().paintEvent(event)
-        painter = QPainter(self)
-        pen = QPen(QColor("#2D333C"))
-        pen.setWidth(1)
-        painter.setPen(pen)
-        painter.drawLine(self.width() - 1, 0, self.width() - 1, self.height())
-
-    # ------------------------------------------------------------------
-    @staticmethod
-    def _make_widget(bg: str, fixed_h: int = 0, border_top: str = "", border_bottom: str = "") -> QWidget:
-        w = QWidget()
-        borders = ""
-        if border_top:
-            borders += f"border-top: 1px solid {border_top};"
-        if border_bottom:
-            borders += f"border-bottom: 1px solid {border_bottom};"
-        w.setStyleSheet(f"QWidget {{ background: {bg}; {borders} }}")
-        if fixed_h:
-            w.setFixedHeight(fixed_h)
-        return w
-
-    @staticmethod
-    def _inactive_style() -> str:
-        return (
-            f"QPushButton {{ background: {_BG}; color: {_TEXT}; border: none; "
-            f"text-align: left; padding: 0 14px; font-size: 13px; font-weight: 400; "
-            f"border-radius: 6px; margin: 1px 10px; }}"
-            f"QPushButton:hover {{ background: {_HOVER}; color: white; }}"
-        )
-
-    @staticmethod
-    def _active_style() -> str:
-        return (
-            f"QPushButton {{ background: {_ACTIVE}; color: white; border: none; "
-            f"text-align: left; padding: 0 14px; font-size: 13px; font-weight: 600; "
-            f"border-radius: 6px; margin: 1px 10px; }}"
-        )
+    def _apply_labels(self):
+        for key, b in self._buttons.items():
+            b.setText(("  " + self._labels[key]) if self._expanded else "")
+        for s in self._section_lbls:
+            s.setVisible(self._expanded)
+        self.foot.setVisible(self._expanded)
