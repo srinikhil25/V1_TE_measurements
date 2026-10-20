@@ -7,12 +7,16 @@ or format change in a driver command is caught without hardware.
 """
 
 import json
+import os
 import time
 from datetime import datetime
 
 import pytest
 
-pytest.importorskip("pyvisa_sim")
+if os.environ.get("CI"):
+    import pyvisa_sim  # noqa: F401  — in CI a missing simulator must fail, not skip
+else:
+    pytest.importorskip("pyvisa_sim")
 
 from pyvisa_sim.devices import Device  # noqa: E402
 

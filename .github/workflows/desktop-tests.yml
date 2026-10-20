@@ -30,8 +30,11 @@ jobs:
         shell: bash
         run: |
           grep -v -i "pyoptris" requirements.txt > requirements-ci.txt
+          # Dev tools (pytest, pytest-qt, pyvisa-sim) without the "-r requirements.txt"
+          # line, so the simulated-rig tests run here instead of being skipped.
+          grep -v "^-r" requirements-dev.txt > requirements-dev-ci.txt
           python -m pip install --upgrade pip
-          pip install -r requirements-ci.txt pytest pytest-qt
+          pip install -r requirements-ci.txt -r requirements-dev-ci.txt
 
       - name: Run tests
         run: python -m pytest -q
