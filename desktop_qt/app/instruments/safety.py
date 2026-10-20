@@ -75,7 +75,7 @@ class SafetyMonitor:
         self.plausible_min_C = float(plausible_min_C)
         self.plausible_max_C = float(plausible_max_C)
         self.max_identical_reads = int(max_identical_reads)
-        self._last_raw = [None, None]
+        self._last_raw: List[Optional[float]] = [None, None]
         self._identical = [0, 0]
         self._invalid_streak = 0
         self._history: Deque[Tuple[float, float]] = deque()   # (time_s, hottest °C)

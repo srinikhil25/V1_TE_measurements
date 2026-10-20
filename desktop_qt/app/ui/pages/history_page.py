@@ -6,28 +6,52 @@ exports (PNG / Excel / CSV / HDF5-NeXus).
 
 from __future__ import annotations
 
-import csv
 import hashlib
 import json
-import os
-import tempfile
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional
 
 import pyqtgraph as pg
-from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
-    QCheckBox, QComboBox, QFileDialog, QFrame, QGridLayout, QHBoxLayout, QLineEdit,
-    QMessageBox, QPushButton, QScrollArea, QSplitter, QStackedWidget, QVBoxLayout, QWidget,
+    QCheckBox,
+    QComboBox,
+    QFileDialog,
+    QGridLayout,
+    QHBoxLayout,
+    QLineEdit,
+    QMessageBox,
+    QPushButton,
+    QSplitter,
+    QStackedWidget,
+    QVBoxLayout,
+    QWidget,
 )
 
+from ...services.run_export import info_lines, iv_info, iv_table, seebeck_table
 from .. import theme as T
 from ..icons import icon as _icon
+from ..widgets.export_ui import save_data, save_graphs
 from ..widgets.plot_data import fast_time_curve
 from ..widgets.ui_kit import (
-    Callout, bin_n_text, ohmic_label,
-    Chip, EmptyState, KeyValueList, LegendStrip, Panel, STATUS_CHIP, Segmented, button,
-    cell, chip_cell, fmt_sci, label, make_table, page_scaffold, pen, set_props, style_plot,
+    STATUS_CHIP,
+    Callout,
+    Chip,
+    EmptyState,
+    KeyValueList,
+    LegendStrip,
+    Panel,
+    Segmented,
+    bin_n_text,
+    button,
+    cell,
+    chip_cell,
+    label,
+    make_table,
+    ohmic_label,
+    page_scaffold,
+    pen,
+    style_plot,
 )
 
 _TYPE_LABEL = {"seebeck": "Seebeck", "iv": "I-V"}
@@ -93,11 +117,12 @@ def _rho_notes(params: Dict) -> List[str]:
     stored = params.get("resistivity_model")
     if isinstance(stored, dict):
         return list(stored.get("notes") or [])
-    if not params.get("geometry"):
+    geometry = params.get("geometry")
+    if not geometry:
         return []
     from ...services.measurement_service import resistivity_model
     try:
-        return resistivity_model(params.get("geometry"), params.get("length"),
+        return resistivity_model(geometry, params.get("length"),
                                  params.get("width"), params.get("thickness"),
                                  params.get("spacing"))["notes"]
     except Exception:
@@ -114,7 +139,10 @@ def _summarise(m, data: List[Dict]) -> Dict:
         return out
     if m.type == "iv":
         from ...services.measurement_service import (
-            _linear_fit_resistance, _ohmic_status, _valid_iv_count)
+            _linear_fit_resistance,
+            _ohmic_status,
+            _valid_iv_count,
+        )
         R, R2 = _linear_fit_resistance(data)
         out.update(R=R, R2=R2, ohmic=_ohmic_status(R2, _valid_iv_count(data)))
         out["result"] = f"R = {_si(R, 'Ω')}" if R is not None else "—"
@@ -328,8 +356,8 @@ class HistoryPage(QWidget):
         t.setRowCount(len(self._runs))
         for r, run in enumerate(self._runs):
             t.setItem(r, 0, _NumItem(f"#{run['id']}", run["id"]))
-            t.setItem(r, 1, cell(_TYPE_LABEL.get(run["type"], run["type"])))
-            t.setItem(r, 2, cell(run["sample"] or "—", tooltip=run["notes"]))
+            t.setItem(r, 1, cell(_TYPE_LABEL.get(run["type"]) or str(run["type"])))
+            t.setItem(r, 2, cell(run["sample"] or "—", tooltip=run["notes"] or ""))
             t.setItem(r, 3, cell(run["operator"] or "—"))
             started = run["started"]
             t.setItem(r, 4, cell(started.strftime("%Y-%m-%d %H:%M") if started else "—", mono=True))
@@ -366,16 +394,12 @@ class HistoryPage(QWidget):
         for r in range(self.table.rowCount()):
             it = self.table.item(r, 0)
             run = self._run_by_id(it.data(Qt.ItemDataRole.UserRole)) if it else None
-            ok = run is not None
-            if ok and typ and run["type"] != typ:
-                ok = False
-            if ok and statuses and run["status"].lower() not in statuses:
-                ok = False
-            if ok and since and (run["started"] is None or run["started"] < since):
-                ok = False
-            if ok and issues_only and run["quality"][1] in ("success", "neutral"):
-                ok = False
-            if ok and text:
+            ok = (run is not None
+                  and not (typ and run["type"] != typ)
+                  and not (statuses and run["status"].lower() not in statuses)
+                  and not (since and (run["started"] is None or run["started"] < since))
+                  and not (issues_only and run["quality"][1] in ("success", "neutral")))
+            if run is not None and ok and text:
                 hay = " ".join([f"#{run['id']}", str(run["id"]), run["sample"], run["operator"],
                                 run["notes"], run["end_reason"], run["result"]]).lower()
                 ok = text in hay
@@ -469,8 +493,8 @@ class HistoryPage(QWidget):
             geo = params.get("geometry")
             if geo:
                 dims = [f"{params[k]:g}" for k in ("length", "width", "thickness") if params.get(k)]
-                kv.set("Geometry", {"bar": "Bar", "vdp": "van der Pauw", "4pp": "4-point probe"}
-                       .get(geo, geo) + (f" · {' × '.join(dims)} cm" if dims else ""))
+                kv.set("Geometry", str({"bar": "Bar", "vdp": "van der Pauw", "4pp": "4-point probe"}
+                           .get(geo, geo)) + (f" · {' × '.join(dims)} cm" if dims else ""))
             if params.get("source_mode"):
                 kv.set("Sweep", f"{params.get('source_mode')} {params.get('start')} → "
                        f"{params.get('stop')} · {params.get('points')} pts"
@@ -487,8 +511,8 @@ class HistoryPage(QWidget):
             if run.get("max_dt") is not None:
                 kv.set("Max |ΔT|", f"{run['max_dt']:.2f} K")
             if params.get("probe_mode"):
-                kv.set("Geometry", {"in_plane": "In-plane", "out_plane": "Out-of-plane"}
-                       .get(params["probe_mode"], params["probe_mode"]))
+                kv.set("Geometry", str({"in_plane": "In-plane", "out_plane": "Out-of-plane"}
+                           .get(params["probe_mode"], params["probe_mode"])))
 
         meta = self.pv_meta
         meta.clear()
@@ -763,7 +787,6 @@ class RunDetailWindow(QWidget):
             self._body.addWidget(pb)
 
         headers = [c[1] for c in _TABLE_COLS]
-        keys = [c[0] for c in _TABLE_COLS]
         pt = Panel(f"Readings · {len(data)} rows", flush=True)
         tbl = make_table(headers, row_height=24, mono=True)
         tbl.horizontalHeader().setDefaultAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
@@ -778,49 +801,21 @@ class RunDetailWindow(QWidget):
         pt.body.addWidget(tbl)
         self._body.addWidget(pt)
 
-        charts = {"live": live, "temf_dt": temf_dt, "s_t0": s_t0}
-        mid = self._mid
+        cols = [(k, h) for k, h, _ in _TABLE_COLS]
+        mode = self._params.get("probe_mode")
+        info = self._info("Seebeck", [("Geometry", {"in_plane": "In-plane",
+                                                    "out_plane": "Out-of-plane"}.get(mode, mode))]
+                          if mode else [])
 
         def _save_graphs():
-            base, _ = QFileDialog.getSaveFileName(self, "Save graphs", f"seebeck_{mid}_graphs",
-                                                  "PNG images (*.png)")
-            if not base:
-                return
-            root, _ext = os.path.splitext(base)
-            paths = []
-            for key, suffix in (("live", "live"), ("temf_dt", "temf_vs_dt"), ("s_t0", "seebeck_vs_t0")):
-                pix = charts[key].grab()
-                if pix.isNull():
-                    continue
-                path = f"{root}_{suffix}.png"
-                pix.save(path, "PNG")
-                paths.append(path)
-            if paths:
-                QMessageBox.information(self, "Save graphs", "Graphs saved as:\n"
-                                        + "\n".join(os.path.basename(p) for p in paths))
+            save_graphs(self, [(live, "live"), (temf_dt, "temf_vs_dt"), (s_t0, "seebeck_vs_t0")],
+                        **self._export_args("seebeck"))
 
         def _save_data():
-            path, selected = QFileDialog.getSaveFileName(
-                self, "Save data", f"seebeck_{mid}_data.xlsx",
-                "Excel workbook (*.xlsx);;CSV file (*.csv)")
-            if not path:
-                return
-            if selected.startswith("CSV") or path.lower().endswith(".csv"):
-                if not path.lower().endswith(".csv"):
-                    path += ".csv"
-                with open(path, "w", newline="", encoding="utf-8") as f:
-                    w = csv.writer(f)
-                    w.writerow(headers)
-                    for row in data:
-                        w.writerow([row.get(k, "") if row.get(k) is not None else "" for k in keys])
-                QMessageBox.information(self, "Save data", f"CSV saved to:\n{path}")
-                return
-            if not path.lower().endswith(".xlsx"):
-                path += ".xlsx"
-            self._write_xlsx(path, headers, [[row.get(k, "") if row.get(k) is not None else ""
-                                              for k in keys] for row in data],
-                             [(charts["live"], 0), (charts["temf_dt"], 20), (charts["s_t0"], 40)],
-                             img_row=len(data) + 3)
+            save_data(self, seebeck_table(data, cols, bins, info),
+                      charts=[("Temperatures and TEMF vs time", live), ("TEMF vs ΔT", temf_dt),
+                              ("S vs T₀", s_t0)],
+                      **self._export_args("seebeck"))
 
         self.btn_graphs.clicked.connect(_save_graphs)
         self.btn_data.clicked.connect(_save_data)
@@ -866,8 +861,8 @@ class RunDetailWindow(QWidget):
         def _build_chart():
             chart = pg.PlotWidget()
             style_plot(chart, "Current (A)", "Voltage (V)")
-            pts = [(r.get("voltage"), r.get("current")) for r in data
-                   if r.get("voltage") is not None and r.get("current") is not None]
+            pts = [(v, c) for r in data
+                   if (v := r.get("voltage")) is not None and (c := r.get("current")) is not None]
             if bidir and n_fwd and len(pts) > n_fwd:
                 fwd, rev = pts[:n_fwd], pts[n_fwd:]
             else:
@@ -909,80 +904,28 @@ class RunDetailWindow(QWidget):
         pt.body.addWidget(tbl)
         self._body.addWidget(pt)
 
-        mid = self._mid
-
         def _save_graph():
-            path, _ = QFileDialog.getSaveFileName(self, "Save graph", f"iv_{mid}.png", "PNG (*.png)")
-            if not path:
-                return
-            pix = chart.grab()
-            if pix.isNull():
-                QMessageBox.warning(self, "Save graph", "The chart image is empty.")
-                return
-            pix.save(path, "PNG")
-            QMessageBox.information(self, "Save graph", f"Saved to:\n{path}")
+            save_graphs(self, [(chart, "graph")], **self._export_args("iv"))
 
         def _save_data():
-            path, selected = QFileDialog.getSaveFileName(
-                self, "Save data", f"iv_{mid}_data.xlsx",
-                "Excel workbook (*.xlsx);;CSV file (*.csv)")
-            if not path:
-                return
-            if selected.startswith("CSV") or path.lower().endswith(".csv"):
-                if not path.lower().endswith(".csv"):
-                    path += ".csv"
-                with open(path, "w", newline="", encoding="utf-8") as f:
-                    w = csv.writer(f)
-                    w.writerow(headers)
-                    for row in rows:
-                        w.writerow(["" if v is None else v for v in row])
-                QMessageBox.information(self, "Save data", f"CSV saved to:\n{path}")
-                return
-            if not path.lower().endswith(".xlsx"):
-                path += ".xlsx"
-            body = [["" if v is None else v for v in row] for row in rows]
-            body += [[], ["Fit R (Ohm)", fit_R], ["R^2", fit_R2], ["Ohmic status", ohmic]]
-            self._write_xlsx(path, headers, body, [(chart, 0)], img_row=len(rows) + 8)
+            table = iv_table(data, fit_R=fit_R, fit_R2=fit_R2, ohmic=ohmic, rho_notes=notes,
+                             info=self._info("I-V sweep", iv_info(self._params)))
+            save_data(self, table, charts=[("I-V characteristic", chart)],
+                      **self._export_args("iv"))
 
         self.btn_graphs.setText("Save graph…")
         self.btn_graphs.clicked.connect(_save_graph)
         self.btn_data.clicked.connect(_save_data)
 
     # ── shared ────────────────────────────────────────────────────────
-    def _write_xlsx(self, path, headers, rows, charts, img_row: int):
-        from openpyxl import Workbook
-        from openpyxl.drawing.image import Image as XLImage
-        wb = Workbook()
-        ws = wb.active
-        ws.title = "Data"
-        ws.append(headers)
-        for row in rows:
-            ws.append(row)
-        try:
-            import PIL  # type: ignore  # noqa: F401
-            tmpdir = tempfile.mkdtemp(prefix="te_run_")
-            files = []
-            for i, (widget, offset) in enumerate(charts):
-                pix = widget.grab()
-                if pix.isNull():
-                    continue
-                fp = os.path.join(tmpdir, f"chart_{i}.png")
-                pix.save(fp, "PNG")
-                ws.add_image(XLImage(fp), f"A{img_row + offset}")
-                files.append(fp)
-            wb.save(path)
-            for fp in files:
-                try:
-                    os.remove(fp)
-                except OSError:
-                    pass
-            try:
-                os.rmdir(tmpdir)
-            except OSError:
-                pass
-            QMessageBox.information(self, "Save data", f"Excel workbook saved to:\n{path}")
-        except ImportError:
-            wb.save(path)
-            QMessageBox.warning(self, "Save data",
-                                "Excel file saved without embedded graphs.\n\n"
-                                "To include graphs, install Pillow:\n  pip install pillow")
+    def _export_args(self, kind: str) -> dict:
+        return {"kind": kind, "run_id": self._mid, "sample": self._m.sample_id}
+
+    def _info(self, kind: str, extra=()) -> list:
+        m = self._m
+        extra = list(extra)
+        if m.end_reason:
+            extra.append(("End reason", m.end_reason))
+        return info_lines(kind=kind, run_id=m.id, sample=m.sample_id, operator=m.operator,
+                          started=m.started_at, finished=m.finished_at, status=m.status,
+                          extra=extra)

@@ -79,9 +79,7 @@ def _str_ds(group, name: str, value: Any):
 def _scalar(group, name: str, value: Any, units: Optional[str] = None):
     if value is None:
         return None
-    if isinstance(value, bool):
-        ds = group.create_dataset(name, data=value)
-    elif isinstance(value, (int, float)):
+    if isinstance(value, (bool, int, float)):
         ds = group.create_dataset(name, data=value)
     elif isinstance(value, (dict, list)):
         ds = _str_ds(group, name, value)
@@ -137,8 +135,7 @@ def _write_columns(group, rows: List[Dict[str, Any]],
 
 def _load(measurement_id: int) -> Dict[str, Any]:
     from ..core import audit, database
-    from ..models.db_models import (
-        Lab, Measurement, MeasurementIntegrity, MeasurementRow, User)
+    from ..models.db_models import Lab, Measurement, MeasurementIntegrity, MeasurementRow, User
 
     db = database.SessionLocal()
     try:
@@ -250,8 +247,7 @@ def export_measurement(measurement_id: int, path: str) -> str:
                     "n_rejected": ("n_outliers_rejected", None),
                 })
         else:
-            from .measurement_service import (_linear_fit_resistance, _ohmic_status,
-                                              _valid_iv_count)
+            from .measurement_service import _linear_fit_resistance, _ohmic_status, _valid_iv_count
             R, R2 = _linear_fit_resistance(data)
             _scalar(an, "method", "Least-squares fit V = R*I + V0 (offset absorbs thermal EMF)")
             _scalar(an, "fit_resistance", R, "Ohm")

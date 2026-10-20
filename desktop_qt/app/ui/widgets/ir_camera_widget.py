@@ -7,16 +7,20 @@ colorbar scale and per-frame Min / Center / Max temperature readings.
 from __future__ import annotations
 
 import numpy as np
-from PyQt6.QtCore import Qt, QTimer, QThread, pyqtSignal
-from PyQt6.QtGui import QImage, QPixmap, QPainter, QColor, QFont
+from PyQt6.QtCore import Qt, QThread, QTimer, pyqtSignal
+from PyQt6.QtGui import QColor, QFont, QImage, QPainter, QPixmap
 from PyQt6.QtWidgets import (
-    QFrame, QHBoxLayout, QLabel, QPushButton, QVBoxLayout,
-    QFileDialog, QMessageBox, QSizePolicy,
+    QFileDialog,
+    QFrame,
+    QHBoxLayout,
+    QLabel,
+    QMessageBox,
+    QSizePolicy,
+    QVBoxLayout,
 )
 
 from .. import theme as T
 from ..icons import pixmap as _icon_pixmap
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Iron colormap helpers

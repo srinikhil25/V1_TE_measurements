@@ -1,4 +1,5 @@
 import sqlite3
+from contextlib import closing
 
 import pytest
 from sqlalchemy import create_engine, inspect
@@ -35,7 +36,7 @@ def _create_all(db_path):
 
 
 def _version(db_path):
-    with sqlite3.connect(db_path) as c:
+    with closing(sqlite3.connect(db_path)) as c, c:
         return c.execute("SELECT version_num FROM alembic_version").fetchone()[0]
 
 
@@ -83,7 +84,7 @@ INSERT INTO measurement_rows VALUES (2, 1, 2, 1, '{"a": 2}');
 
 def test_legacy_unversioned_database_is_upgraded_without_data_loss(tmp_path):
     db = str(tmp_path / "legacy.db")
-    with sqlite3.connect(db) as c:
+    with closing(sqlite3.connect(db)) as c, c:
         c.executescript(LEGACY_DDL)
         c.execute("PRAGMA journal_mode=WAL")
 
@@ -91,7 +92,7 @@ def test_legacy_unversioned_database_is_upgraded_without_data_loss(tmp_path):
     assert applied == ALL
     assert _version(db) == HEAD
 
-    with sqlite3.connect(db) as c:
+    with closing(sqlite3.connect(db)) as c, c:
         assert c.execute("SELECT count(*) FROM measurement_rows").fetchone()[0] == 2
         assert c.execute("SELECT sample_id FROM measurements").fetchone()[0] == "S1"
         # baseline created the table the legacy DB was missing
@@ -105,7 +106,7 @@ def test_legacy_unversioned_database_is_upgraded_without_data_loss(tmp_path):
 
     backups = list(tmp_path.glob("legacy.backup-pre-0001-*.db"))
     assert len(backups) == 1
-    with sqlite3.connect(str(backups[0])) as c:
+    with closing(sqlite3.connect(str(backups[0]))) as c, c:
         cols = [r[1] for r in c.execute("PRAGMA table_info(measurements)")]
         assert "end_reason" not in cols          # backup is the pre-migration state
         assert c.execute("SELECT count(*) FROM measurement_rows").fetchone()[0] == 2
@@ -114,7 +115,7 @@ def test_legacy_unversioned_database_is_upgraded_without_data_loss(tmp_path):
 def test_newer_database_is_refused(tmp_path):
     db = str(tmp_path / "future.db")
     upgrade_database(db)
-    with sqlite3.connect(db) as c:
+    with closing(sqlite3.connect(db)) as c, c:
         c.execute("UPDATE alembic_version SET version_num = '9999'")
     with pytest.raises(RuntimeError, match="newer"):
         upgrade_database(db)

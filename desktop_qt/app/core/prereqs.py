@@ -42,7 +42,7 @@ class PrereqStatus:
 
 def _ni_visa_present() -> bool:
     # 1) VISA implementation DLL in System32 (visa64.dll / visa32.dll).
-    sysroot = os.environ.get("SystemRoot", r"C:\Windows")
+    sysroot = os.environ.get("SYSTEMROOT", r"C:\Windows")
     sys32 = os.path.join(sysroot, "System32")
     if any(os.path.isfile(os.path.join(sys32, d)) for d in ("visa64.dll", "visa32.dll")):
         return True

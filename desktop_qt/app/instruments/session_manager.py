@@ -5,17 +5,17 @@ import threading
 import time
 import weakref
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, cast
 
+from ..core import audit
+from ..core.config import get_config
+from ..core.database import get_session
+from ..core.run_context import build_run_context
+from ..models.db_models import Measurement, MeasurementIntegrity, MeasurementRow
 from .instrument import SeebeckSystem
 from .safety import SafetyMonitor
 from .seebeck_analysis import binned_seebeck_analysis, polarity_verdict, polarity_vote
 from .visa_guard import failure_summary, reset_instrument_health
-from ..core import audit
-from ..core.config import get_config
-from ..core.run_context import build_run_context
-from ..core.database import get_session
-from ..models.db_models import Measurement, MeasurementIntegrity, MeasurementRow
 
 logger = logging.getLogger(__name__)
 
@@ -299,7 +299,7 @@ class MeasurementSessionManager:
             if callable(set_abort):
                 set_abort(lambda: self._stop_requested)
             identify = getattr(self.seebeck_system, "identify", None)
-            instruments = identify() if callable(identify) else {}
+            instruments = cast(Dict[str, Any], identify()) if callable(identify) else {}
             self._run_context = build_run_context(instruments, cfg)
 
             # Apply per-geometry heater limits (voltage compliance + current cap)
@@ -453,7 +453,7 @@ class MeasurementSessionManager:
 
                 t1, t2 = check.t1, check.t2
                 temf_mv = result["TEMF_mV"]
-                if check.valid:
+                if check.valid and t1 is not None and t2 is not None:
                     delta_t = t2 - t1
                     t0_c = (t1 + t2) / 2.0
                     t0_k = t0_c + 273.15
@@ -578,7 +578,7 @@ class MeasurementSessionManager:
             outcome = STATUS_ERROR
             self.end_reason = self._with_instrument_detail(f"Error: {e}")
             logger.exception("Seebeck session error")
-            self.session_status = f"error: {str(e)}"
+            self.session_status = f"error: {e!s}"
             self.session_active = False
             self.session_phase = None
             self.session_step = 0

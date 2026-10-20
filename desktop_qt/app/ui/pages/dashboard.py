@@ -4,16 +4,27 @@ from __future__ import annotations
 
 import os
 from datetime import datetime
-from typing import Callable, Optional
+from typing import Callable
 
-from PyQt6.QtCore import Qt, QTimer
-from PyQt6.QtWidgets import QGridLayout, QHBoxLayout, QLabel, QVBoxLayout, QWidget
+from PyQt6.QtCore import Qt
+from PyQt6.QtWidgets import QGridLayout, QVBoxLayout, QWidget
 
 from .. import theme as T
 from ..widgets.run_state import fmt_elapsed, instrument_status
 from ..widgets.ui_kit import (
-    Chip, Dot, EmptyState, KeyValueList, Panel, STATUS_CHIP, button, cell, chip_cell,
-    hbox, label, make_table, page_scaffold, set_props,
+    STATUS_CHIP,
+    Chip,
+    Dot,
+    EmptyState,
+    KeyValueList,
+    Panel,
+    button,
+    cell,
+    chip_cell,
+    hbox,
+    label,
+    make_table,
+    page_scaffold,
 )
 
 _TYPE_LABEL = {"seebeck": "Seebeck", "iv": "I-V"}

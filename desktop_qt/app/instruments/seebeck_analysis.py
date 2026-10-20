@@ -6,7 +6,7 @@ S ≈ −38 µV/K): T1 is the HOT side, T2 the COLD side, ΔT = T2 − T1, so Δ
 negative while heating and S = TEMF / ΔT. :func:`polarity_check` flags runs
 where the two thermocouples look swapped.
 """
-from typing import List, Dict, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 #: Spike rejection: points whose residual exceeds CLIP_SIGMA robust standard
 #: deviations (1.4826 × median absolute deviation) are rejected, repeatedly,

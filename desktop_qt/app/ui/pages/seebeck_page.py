@@ -11,31 +11,52 @@ Every chart / table tile can be enlarged to fill the centre area.
 
 from __future__ import annotations
 
-import os
-import tempfile
 import time
-from typing import Dict, List, Optional
+from typing import ClassVar, Dict, List, Optional
 
 import pyqtgraph as pg
-from openpyxl import Workbook
-from openpyxl.drawing.image import Image as XLImage
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtWidgets import (
-    QFileDialog, QFrame, QGridLayout, QHBoxLayout, QLineEdit, QListWidget,
-    QListWidgetItem, QMessageBox, QScrollArea, QVBoxLayout, QWidget,
+    QFrame,
+    QGridLayout,
+    QHBoxLayout,
+    QLineEdit,
+    QListWidget,
+    QListWidgetItem,
+    QMessageBox,
+    QScrollArea,
+    QVBoxLayout,
+    QWidget,
 )
 
+from ...services.run_export import RunTable, info_lines, seebeck_table
 from .. import theme as T
+from ..widgets.export_ui import save_data, save_graphs
 from ..widgets.ir_camera_widget import IrCameraWidget
 from ..widgets.measurement_setup_dialog import MeasurementSetupDialog
 from ..widgets.plot_data import ColumnBuffer, fast_time_curve, thin
 from ..widgets.profile_preview import ProfilePreview, fmt_duration, profile_duration_s
 from ..widgets.tile import Tile, icon_button
 from ..widgets.ui_kit import (
-    Callout, set_field_error,
+    Callout,
+    Chip,
+    KeyValueList,
+    LegendStrip,
+    Panel,
+    Readout,
+    ReadoutGrid,
+    Segmented,
+    Stepper,
     bin_n_text,
-    Chip, KeyValueList, LegendStrip, Panel, Readout, ReadoutGrid, Segmented, Stepper,
-    button, cell, field, label, make_table, page_scaffold, pen, set_props, style_plot,
+    button,
+    cell,
+    field,
+    label,
+    make_table,
+    page_scaffold,
+    pen,
+    set_field_error,
+    style_plot,
 )
 
 # Phase vocabulary: key → (display name, chip kind)
@@ -82,14 +103,14 @@ _GEOMETRY = (("in_plane", "In-plane"), ("out_plane", "Out-of-plane"))
 class SeebeckPage(QWidget):
 
     # Default heater profile (used until the operator edits it).
-    _DEFAULT_PROFILE = {
+    _DEFAULT_PROFILE: ClassVar[dict] = {
         "interval": 2, "pre_time": 5, "hold_time": 600,
         "start_volt": 0.0, "stop_volt": 1.0,
         "inc_rate": 1.0, "dec_rate": 1.0, "pk160_current_unit": "mA",
     }
 
     # Per-geometry current cap (amperes): In-Plane 1.0 A · Out-Plane 1.3 A
-    CURRENT_CAP_A = {"in_plane": 1.0, "out_plane": 1.3}
+    DEFAULT_CURRENT_CAP_A: ClassVar[dict] = {"in_plane": 1.0, "out_plane": 1.3}
 
     # Secondary columns shown only when the data tile is enlarged
     # (ΔT/T₀ · T₀[°C] · T₀[K]).
@@ -124,10 +145,11 @@ class SeebeckPage(QWidget):
         self._timer.setInterval(1000)
         self._timer.timeout.connect(self._poll)
 
+        self.current_cap_a = dict(self.DEFAULT_CURRENT_CAP_A)
         try:
             from ...core.config import get_config
             h = get_config().heater
-            self.CURRENT_CAP_A = {"in_plane": h.in_plane.current_max_A,
+            self.current_cap_a = {"in_plane": h.in_plane.current_max_A,
                                   "out_plane": h.out_plane.current_max_A}
         except Exception:
             pass
@@ -453,8 +475,8 @@ class SeebeckPage(QWidget):
         pi.vb.sigResized.connect(_sync_views)
         _sync_views()
 
-        chart.setXRange(0, 60, padding=0)
-        chart.setYRange(0, 100, padding=0.05)
+        pi.getViewBox().setXRange(0, 60, padding=0)
+        pi.getViewBox().setYRange(0, 100, padding=0.05)
         self._vb_temf.setYRange(-5, 5, padding=0.05)
         self.chart_live = chart
 
@@ -529,7 +551,7 @@ class SeebeckPage(QWidget):
 
     def _on_geometry_changed(self, _idx: int):
         mode = self._current_mode()
-        cap = self.CURRENT_CAP_A.get(mode)
+        cap = self.current_cap_a.get(mode)
         if cap is not None:
             self.lbl_geom_hint.setText(f"Heater current is limited to {cap:g} A in this geometry.")
             unit = self._profile_params.get("pk160_current_unit", "mA")
@@ -623,7 +645,7 @@ class SeebeckPage(QWidget):
             win = self.window()
             dlg = MeasurementSetupDialog(
                 self._profile_params, self._cooling_target,
-                self.CURRENT_CAP_A[self._current_mode()], win,
+                self.current_cap_a[self._current_mode()], win,
             )
             geo = dlg.frameGeometry()
             geo.moveCenter(win.frameGeometry().center())
@@ -814,7 +836,7 @@ class SeebeckPage(QWidget):
         if "error" in (status.get("status") or ""):
             safety = bool(reason and reason.startswith("Safety abort"))
             title = "Safety abort — heater switched off" if safety else "Run stopped by an error"
-            msg = reason or status.get("status")
+            msg = reason or status.get("status") or "unknown error"
             self._log(f"{title}: {msg}", "danger")
             if db_warning:
                 msg += "\n\n" + db_warning
@@ -906,8 +928,9 @@ class SeebeckPage(QWidget):
             dt, tf = r.get("Delta Temp [oC]"), r.get("TEMF [mV]")
             if r.get("branch") == "cooling":
                 # Cooling continues from the heating peak (max ΔT) and traces back down.
-                if len(self._buf_cool) == 0 and len(self._buf_heat):
-                    self._buf_cool.append(self._buf_heat.last())
+                peak = self._buf_heat.last()
+                if len(self._buf_cool) == 0 and peak is not None:
+                    self._buf_cool.append(peak)
                 if dt is not None and tf is not None:
                     self._buf_cool.append((dt, tf))
             elif dt is not None and tf is not None:
@@ -977,114 +1000,31 @@ class SeebeckPage(QWidget):
     # Export
     # ==================================================================
 
+    def _export_args(self) -> dict:
+        return {"kind": "seebeck", "run_id": self._run_id,
+                "sample": self.inp_sample.text().strip() or None}
+
+    def _run_table(self) -> RunTable:
+        info = info_lines(
+            kind="Seebeck", run_id=self._run_id,
+            sample=self.inp_sample.text().strip(),
+            operator=getattr(self._user, "username", None),
+            extra=[("Geometry", dict(_GEOMETRY).get(self._current_mode(), self._current_mode())),
+                   ("Readings", len(self._data))])
+        return seebeck_table(self._data, [(k, h) for k, h, _ in _TABLE_COLS],
+                             self._analysis, info)
+
     def _export_single_chart(self, widget: pg.PlotWidget, suffix: str):
-        if not self._data:
-            QMessageBox.information(self, "Save chart", "There is no data to save yet.")
-            return
-        path, _ = QFileDialog.getSaveFileName(
-            self, "Save chart", f"seebeck_{suffix}.png", "PNG image (*.png)")
-        if not path:
-            return
-        if not path.lower().endswith(".png"):
-            path += ".png"
-        pix = widget.grab()
-        if not pix.isNull():
-            pix.save(path, "PNG")
-            QMessageBox.information(self, "Save chart", f"Chart saved to:\n{path}")
+        save_graphs(self, [(widget, suffix)], has_data=bool(self._data), **self._export_args())
 
     def _export_graphs(self):
-        if not self._data:
-            QMessageBox.information(self, "Save graphs", "There is no data to save yet.")
-            return
-        base, _ = QFileDialog.getSaveFileName(
-            self, "Save graphs (base filename)", "seebeck_graphs", "PNG images (*.png)")
-        if not base:
-            return
-        root, _ext = os.path.splitext(base)
-        targets = [
-            (self.chart_live, f"{root}_live.png"),
-            (self.chart_temf_dt, f"{root}_temf_vs_dt.png"),
-            (self.chart_s_t0, f"{root}_seebeck_vs_t0.png"),
-        ]
-        for widget, path in targets:
-            pix = widget.grab()
-            if not pix.isNull():
-                pix.save(path, "PNG")
-        QMessageBox.information(
-            self, "Save graphs",
-            "Graphs saved as:\n" + "\n".join(os.path.basename(p) for _, p in targets))
+        save_graphs(self, [(self.chart_live, "live"), (self.chart_temf_dt, "temf_vs_dt"),
+                           (self.chart_s_t0, "seebeck_vs_t0")],
+                    has_data=bool(self._data), **self._export_args())
 
     def _export_data(self):
-        if not self._data:
-            QMessageBox.information(self, "Save data", "There is no data to save yet.")
-            return
-        path, selected_filter = QFileDialog.getSaveFileName(
-            self, "Save data", "seebeck_data.xlsx",
-            "Excel workbook (*.xlsx);;CSV file (*.csv)")
-        if not path:
-            return
-        if selected_filter.startswith("CSV") or path.lower().endswith(".csv"):
-            if not path.lower().endswith(".csv"):
-                path += ".csv"
-            self._export_csv(path)
-        else:
-            if not path.lower().endswith(".xlsx"):
-                path += ".xlsx"
-            self._export_excel_with_graphs(path)
-
-    def _export_csv(self, path: str):
-        import csv
-        headers = [c[1] for c in _TABLE_COLS]
-        keys = [c[0] for c in _TABLE_COLS]
-        with open(path, "w", newline="", encoding="utf-8") as f:
-            writer = csv.writer(f)
-            writer.writerow(headers)
-            for row in self._data:
-                writer.writerow([row.get(k, "") if row.get(k) is not None else "" for k in keys])
-        QMessageBox.information(self, "Save data", f"CSV saved to:\n{path}")
-
-    def _export_excel_with_graphs(self, path: str):
-        wb = Workbook()
-        ws = wb.active
-        ws.title = "Data"
-        headers = [c[1] for c in _TABLE_COLS]
-        keys = [c[0] for c in _TABLE_COLS]
-        ws.append(headers)
-        for row in self._data:
-            ws.append([row.get(k, "") if row.get(k) is not None else "" for k in keys])
-
-        try:
-            import PIL  # type: ignore  # noqa: F401
-            img_start_row = len(self._data) + 3
-            tmpdir = tempfile.mkdtemp(prefix="seebeck_graphs_")
-            files = []
-
-            def _save_chart(widget, name, row_offset):
-                pix = widget.grab()
-                if pix.isNull():
-                    return
-                fp = os.path.join(tmpdir, name)
-                pix.save(fp, "PNG")
-                ws.add_image(XLImage(fp), f"A{img_start_row + row_offset}")
-                files.append(fp)
-
-            _save_chart(self.chart_live, "chart_live.png", 0)
-            _save_chart(self.chart_temf_dt, "chart_temf_dt.png", 20)
-            _save_chart(self.chart_s_t0, "chart_s_t0.png", 40)
-            wb.save(path)
-            for fp in files:
-                try:
-                    os.remove(fp)
-                except OSError:
-                    pass
-            try:
-                os.rmdir(tmpdir)
-            except OSError:
-                pass
-            QMessageBox.information(self, "Save data", f"Excel workbook saved to:\n{path}")
-        except ImportError:
-            wb.save(path)
-            QMessageBox.warning(
-                self, "Save data",
-                "Excel file saved without embedded graphs.\n\n"
-                "To include graphs, install Pillow:\n  pip install pillow")
+        save_data(self, self._run_table(),
+                  charts=[("Temperatures and TEMF vs time", self.chart_live),
+                          ("TEMF vs ΔT", self.chart_temf_dt),
+                          ("S vs T₀", self.chart_s_t0)],
+                  **self._export_args())

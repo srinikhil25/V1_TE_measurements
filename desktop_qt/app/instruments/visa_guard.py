@@ -36,7 +36,7 @@ import contextlib
 import logging
 import threading
 import time
-from typing import Any, Callable, Dict, Iterator, Optional
+from typing import Any, Callable, ContextManager, Dict, Iterator, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -60,7 +60,9 @@ _health: Dict[str, Dict[str, Any]] = {}
 _health_guard = threading.Lock()
 
 
-def _describe_error(exc: BaseException) -> str:
+def _describe_error(exc: Optional[BaseException]) -> str:
+    if exc is None:
+        return "failed"
     if is_timeout(exc):
         return "no answer (timeout)"
     if isinstance(exc, InstrumentBusyError):
@@ -290,10 +292,9 @@ def write_once(instrument: Any, message: str):
     return instrument.write(message)
 
 
-def transaction(instrument: Any):
+def transaction(instrument: Any) -> ContextManager[Any]:
     """``with transaction(inst):`` — holds the lock of a guarded session; a
     no-op context for anything else (test fakes, ``None``)."""
-    txn = getattr(instrument, "transaction", None)
-    if isinstance(instrument, GuardedResource) and callable(txn):
-        return txn()
+    if isinstance(instrument, GuardedResource):
+        return instrument.transaction()
     return contextlib.nullcontext(instrument)

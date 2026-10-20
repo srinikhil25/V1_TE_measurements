@@ -20,13 +20,18 @@ Visual zones
 
 from __future__ import annotations
 
-from PyQt6.QtWidgets import QWidget, QDoubleSpinBox, QSpinBox, QLabel, QComboBox
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import QPoint, Qt, pyqtSignal
 from PyQt6.QtGui import (
-    QPainter, QPen, QColor, QFont, QPalette, QBrush, QPolygon,
+    QBrush,
+    QColor,
+    QFont,
     QLinearGradient,
+    QPainter,
+    QPalette,
+    QPen,
+    QPolygon,
 )
-from PyQt6.QtCore import QPoint, QRect
+from PyQt6.QtWidgets import QComboBox, QDoubleSpinBox, QLabel, QSpinBox, QWidget
 
 # ── Layout margins (px) ────────────────────────────────────────────────────
 _ML = 96    # left  — I₀/I_peak spinboxes + Y-axis label

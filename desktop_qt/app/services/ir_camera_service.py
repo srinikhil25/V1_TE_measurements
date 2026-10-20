@@ -36,7 +36,6 @@ from typing import Optional
 
 import numpy as np
 
-
 # ─────────────────────────────────────────────────────────────────────────────
 # Configuration
 # ─────────────────────────────────────────────────────────────────────────────
@@ -74,6 +73,9 @@ class IrCameraService:
 
     _instance:   Optional["IrCameraService"] = None
     _class_lock: threading.Lock              = threading.Lock()
+
+    # Set once in __new__ (singleton).
+    config: IrCameraConfig
 
     def __new__(cls) -> "IrCameraService":
         with cls._class_lock:

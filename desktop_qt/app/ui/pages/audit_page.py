@@ -5,14 +5,28 @@ from datetime import datetime
 
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
-    QCheckBox, QComboBox, QHBoxLayout, QLineEdit, QMessageBox, QPlainTextEdit, QSplitter,
-    QVBoxLayout, QWidget,
+    QCheckBox,
+    QComboBox,
+    QHBoxLayout,
+    QLineEdit,
+    QMessageBox,
+    QPlainTextEdit,
+    QSplitter,
+    QWidget,
 )
 
 from .. import theme as T
 from ..icons import icon as _icon
 from ..widgets.ui_kit import (
-    Callout, EmptyState, KeyValueList, Panel, button, cell, label, make_table, page_scaffold,
+    Callout,
+    EmptyState,
+    KeyValueList,
+    Panel,
+    button,
+    cell,
+    label,
+    make_table,
+    page_scaffold,
 )
 
 _HEADERS = ["#", "Time", "User", "Event", "Run", "Details", "Reason"]
@@ -175,11 +189,9 @@ class AuditPage(QWidget):
         shown = 0
         for i in range(self.table.rowCount()):
             r = self._rows[i] if i < len(self._rows) else None
-            ok = r is not None
-            if ok and action and r["action"] != action:
-                ok = False
-            if ok and problems and not _is_problem(r):
-                ok = False
+            ok = (r is not None
+                  and not (action and r["action"] != action)
+                  and not (problems and not _is_problem(r)))
             if ok and t:
                 hay = " ".join((self.table.item(i, j).text() if self.table.item(i, j) else "")
                                for j in range(self.table.columnCount())).lower()

@@ -11,7 +11,7 @@ import logging
 import threading
 import time
 from datetime import datetime
-from typing import Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, TypeIs, cast
 
 logger = logging.getLogger(__name__)
 
@@ -367,7 +367,7 @@ def run_iv_sweep(
         # Settings snapshot (software, host, config, instrument *IDN?).
         from ..core.run_context import build_run_context
         identify = getattr(system, "identify", None)
-        run_context = build_run_context(identify() if callable(identify) else {})
+        run_context = build_run_context(cast(Dict[str, Any], identify()) if callable(identify) else {})
 
         rho_model = resistivity_model(geometry, length, width, thickness, spacing)
 
@@ -473,7 +473,8 @@ def run_iv_sweep(
                         f"Keithley 2401 gave no reading {failed_reads} times in a row "
                         "— sweep stopped")
                     raise RuntimeError(end_reason)
-                pt = {"voltage": None, "current": None, "resistance": None}
+                pt: Dict[str, Optional[float]] = {"voltage": None, "current": None,
+                                                  "resistance": None}
                 pt["current" if is_current else "voltage"] = level
             else:
                 failed_reads = 0
@@ -615,7 +616,7 @@ def resistivity_model(geometry: str, length: Optional[float], width: Optional[fl
            "thickness_factor": None, "notes": []}
     notes = out["notes"]
 
-    def pos(v):
+    def pos(v: Optional[float]) -> TypeIs[float]:
         return v is not None and v > 0
 
     if geometry == "vdp":
@@ -653,9 +654,9 @@ def resistivity_model(geometry: str, length: Optional[float], width: Optional[fl
             k *= c
         out["rho_per_ohm"] = k
     else:
-        missing = [n for n, v in (("length", length), ("width", width),
-                                  ("thickness", thickness)) if not pos(v)]
-        if missing:
+        if not (pos(length) and pos(width) and pos(thickness)):
+            missing = [n for n, v in (("length", length), ("width", width),
+                                      ("thickness", thickness)) if not pos(v)]
             notes.append("Resistivity not computed: the bar geometry needs "
                          + ", ".join(missing) + " > 0.")
             return out

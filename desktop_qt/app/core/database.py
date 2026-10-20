@@ -1,8 +1,9 @@
 """SQLAlchemy engine, session factory, and database initialisation."""
 
 import logging
+
 from sqlalchemy import create_engine, event
-from sqlalchemy.orm import sessionmaker, DeclarativeBase
+from sqlalchemy.orm import DeclarativeBase, sessionmaker
 
 from .paths import get_db_path
 
@@ -48,10 +49,10 @@ def init_db() -> None:
     its previous revision); the caller must not start the app on a half-known
     schema.
     """
-    from . import audit
-    from .backup import daily_backup
     from ..migrations import upgrade_database
     from ..models import db_models  # noqa: F401 — registers models
+    from . import audit
+    from .backup import daily_backup
 
     applied = upgrade_database(get_db_path())
     if applied:

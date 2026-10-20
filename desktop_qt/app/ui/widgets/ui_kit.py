@@ -8,16 +8,22 @@ from __future__ import annotations
 
 from typing import Iterable, List, Optional, Sequence, Tuple
 
-from PyQt6.QtCore import Qt, QSize, pyqtSignal
+from PyQt6.QtCore import QSize, Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QPainter, QPen
 from PyQt6.QtWidgets import (
-    QButtonGroup, QFrame, QGridLayout, QHBoxLayout, QLabel, QPushButton,
-    QSizePolicy, QVBoxLayout, QWidget,
+    QButtonGroup,
+    QFrame,
+    QGridLayout,
+    QHBoxLayout,
+    QLabel,
+    QPushButton,
+    QSizePolicy,
+    QVBoxLayout,
+    QWidget,
 )
 
 from .. import theme as T
 from ..icons import icon as _icon
-
 
 # ---------------------------------------------------------------------------
 # Property helpers
@@ -148,9 +154,9 @@ class Panel(QFrame):
         tcol.addWidget(self.subtitle_lbl)
         h.addLayout(tcol)
         h.addStretch()
-        self.actions = QHBoxLayout()
-        self.actions.setSpacing(6)
-        h.addLayout(self.actions)
+        self.actions_row = QHBoxLayout()
+        self.actions_row.setSpacing(6)
+        h.addLayout(self.actions_row)
         self.header.setMinimumHeight(40)
         self.header.setVisible(bool(title))
         outer.addWidget(self.header)
@@ -172,7 +178,7 @@ class Panel(QFrame):
         outer.addWidget(self.footer)
 
     def add_action(self, w: QWidget) -> QWidget:
-        self.actions.addWidget(w)
+        self.actions_row.addWidget(w)
         return w
 
     def set_title(self, text: str) -> None:
@@ -215,13 +221,13 @@ class PageToolbar(QFrame):
         self.middle.setSpacing(12)
         lay.addLayout(self.middle)
         lay.addStretch()
-        self.actions = QHBoxLayout()
-        self.actions.setSpacing(8)
-        lay.addLayout(self.actions)
+        self.actions_row = QHBoxLayout()
+        self.actions_row.setSpacing(8)
+        lay.addLayout(self.actions_row)
         self.setMinimumHeight(58)
 
     def add_action(self, w) -> None:
-        _add(self.actions, w)
+        _add(self.actions_row, w)
 
     def add_middle(self, w) -> None:
         _add(self.middle, w)
@@ -481,9 +487,16 @@ class ReadoutGrid(QFrame):
 # Forms
 # ---------------------------------------------------------------------------
 
-def field(caption: str, widget: QWidget, hint: str = "", *, required: bool = False) -> QWidget:
+class FieldWidget(QWidget):
+    """A field(): caption, input, optional hint and an (initially hidden) error."""
+
+    error_lbl: QLabel
+
+
+def field(caption: str, widget: QWidget, hint: str = "", *,
+          required: bool = False) -> FieldWidget:
     """Label above an input, with an optional hint below."""
-    w = QWidget()
+    w = FieldWidget()
     lay = QVBoxLayout(w)
     lay.setContentsMargins(0, 0, 0, 0)
     lay.setSpacing(4)
@@ -673,11 +686,10 @@ class Stepper(QWidget):
         f = QFont(T.ui_family())
         f.setPixelSize(12)
         p.setFont(f)
-        fm = p.fontMetrics()
         cy = h / 2
         for i, name in enumerate(self._steps):
             x0 = i * seg
-            done = self._all_done or (0 <= self._current and i < self._current)
+            done = self._all_done or (self._current >= 0 and i < self._current)
             cur = (i == self._current) and not self._all_done
             # connector
             if i > 0:
@@ -862,19 +874,19 @@ def _sort_item_class():
 
 
 class _Lazy:
-    cls = None
+    cls: Optional[type] = None
 
 
 def SortItem(text: str = ""):
     if _Lazy.cls is None:
         _Lazy.cls = _sort_item_class()
-    return _Lazy.cls(text)
+    return _Lazy.cls(text)  # pyright: ignore[reportOptionalCall]
 
 
 def cell(text: str, *, align: str = "left", mono: bool = False, tooltip: str = "",
          color: Optional[str] = None, bold: bool = False, data=None):
     """QTableWidgetItem helper. align: left · right · center."""
-    from PyQt6.QtGui import QFont, QBrush
+    from PyQt6.QtGui import QBrush, QFont
     it = SortItem(text)
     a = {"left": Qt.AlignmentFlag.AlignLeft, "right": Qt.AlignmentFlag.AlignRight,
          "center": Qt.AlignmentFlag.AlignHCenter}[align]
@@ -927,10 +939,10 @@ def fmt_sci(v, digits: int = 3, unit: str = "") -> str:
         return "—"
     import math
     if v == 0 or (1e-3 <= abs(v) < 1e4):
-        decimals = max(0, digits - 1 - int(math.floor(math.log10(abs(v))))) if v else digits - 1
+        decimals = max(0, digits - 1 - math.floor(math.log10(abs(v)))) if v else digits - 1
         s = f"{v:.{decimals}f}"
     else:
-        e = int(math.floor(math.log10(abs(v))))
+        e = math.floor(math.log10(abs(v)))
         m = v / 10 ** e
         sup = str(e).translate(str.maketrans("-0123456789", "⁻⁰¹²³⁴⁵⁶⁷⁸⁹"))
         s = f"{m:.{max(digits - 1, 0)}f} × 10{sup}"

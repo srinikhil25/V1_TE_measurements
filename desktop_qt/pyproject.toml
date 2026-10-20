@@ -1,0 +1,53 @@
+# Tool configuration only — the app is not packaged from here (see
+# TE-Measurement.spec and installer/).
+
+[tool.ruff]
+target-version = "py313"
+line-length = 100
+src = ["."]
+include = ["app/**/*.py", "tests/**/*.py", "main.py"]
+
+[tool.ruff.lint]
+# Pyflakes + pycodestyle errors/warnings, import order, bugbear, simplify, Ruff.
+select = ["E", "F", "W", "I", "B", "SIM", "RUF"]
+ignore = [
+    "E501",     # long lines: not reformatting the codebase for this
+    "E702",     # `a; b` on one line — used deliberately in compact painter code
+    "E741",     # physics names (I for current, l for length) are clearer here
+    "B905",     # zip(strict=) — several zips pair a list with its own tail
+    "RUF001",   # µ, Δ, −, ° in strings/docstrings/comments are intentional
+    "RUF002",
+    "RUF003",
+    "RUF005",   # [*a, b] vs a + [b]: style only
+    "SIM105",   # contextlib.suppress vs try/except/pass: style only
+    "SIM108",   # ternary vs if/else: style only
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["app", "tests"]
+
+[tool.pyright]
+include = ["app"]
+pythonVersion = "3.13"
+typeCheckingMode = "basic"
+# Local runs use ./venv; CI passes --pythonpath to its own interpreter.
+venvPath = "."
+venv = "venv"
+reportMissingModuleSource = false
+# PyQt6 / pyqtgraph / openpyxl stubs mark header(), layout(), takeAt(),
+# viewport(), PlotItem.vb, Workbook.active … as Optional although they are
+# never None for widgets we build ourselves; checking each would only add noise.
+reportOptionalMemberAccess = false
+
+[tool.coverage.run]
+source = ["app"]
+omit = ["app/instruments/sim/*"]
+
+[tool.coverage.report]
+# CI runs `pytest --cov`; below this the job fails. Raise it as tests grow.
+fail_under = 70
+skip_empty = true
+exclude_also = [
+    "if __name__ == .__main__.:",
+    "if TYPE_CHECKING:",
+]

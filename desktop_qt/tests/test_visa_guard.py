@@ -267,6 +267,7 @@ def test_iv_refused_while_seebeck_runs(monkeypatch):
 def test_tests_cannot_open_the_real_visa_library(monkeypatch):
     """conftest blocks NI-VISA: a stray scan must never reach the real GPIB bus."""
     import pyvisa
+
     from app.instruments import visa_backend
     monkeypatch.delenv(visa_backend.ENV_VAR, raising=False)
     with pytest.raises(RuntimeError, match="real VISA library"):

@@ -15,15 +15,26 @@ Public API matches the other editors:
 
 from __future__ import annotations
 
-from PyQt6.QtWidgets import (
-    QGraphicsView, QGraphicsScene, QDoubleSpinBox, QSpinBox, QComboBox,
-)
-from PyQt6.QtCore import Qt, QRectF, QPointF, pyqtSignal
+from PyQt6.QtCore import QPointF, QRectF, Qt, pyqtSignal
 from PyQt6.QtGui import (
-    QPainter, QPainterPath, QPen, QColor, QFont, QBrush, QLinearGradient, QPolygonF,
+    QBrush,
+    QColor,
+    QFont,
+    QLinearGradient,
+    QPainter,
+    QPainterPath,
+    QPen,
+    QPolygonF,
+)
+from PyQt6.QtWidgets import (
+    QComboBox,
+    QDoubleSpinBox,
+    QGraphicsScene,
+    QGraphicsView,
+    QSpinBox,
 )
 
-from ..theme import PRIMARY, BORDER_STRONG, TEXT_SECONDARY, TEXT_MUTED
+from ..theme import BORDER_STRONG, PRIMARY, TEXT_MUTED, TEXT_SECONDARY
 
 # ── Fixed design coordinate space (the scene never changes size) ──────────────
 _W, _H = 384, 326

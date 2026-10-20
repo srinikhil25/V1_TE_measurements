@@ -11,7 +11,7 @@ Usage:
 from __future__ import annotations
 
 from PyQt6.QtCore import QByteArray, Qt
-from PyQt6.QtGui import QIcon, QPixmap, QPainter
+from PyQt6.QtGui import QIcon, QPainter, QPixmap
 from PyQt6.QtSvg import QSvgRenderer
 
 _PATHS = {

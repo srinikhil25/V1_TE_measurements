@@ -6,6 +6,8 @@ current levels, and highlights the active segment during a run.
 
 from __future__ import annotations
 
+from itertools import pairwise
+
 from PyQt6.QtCore import QPointF, QRectF, Qt
 from PyQt6.QtGui import QColor, QFont, QPainter, QPainterPath, QPen
 from PyQt6.QtWidgets import QSizePolicy, QWidget
@@ -55,7 +57,7 @@ class ProfilePreview(QWidget):
         cw, ch = w - left - right, h - top - bottom
         y0, y1 = top + ch, top + 4
         f = self._fractions()
-        xs = [left]
+        xs: list[float] = [left]
         for fr in f:
             xs.append(xs[-1] + fr * cw * 0.92)
         x_end = left + cw
@@ -98,7 +100,7 @@ class ProfilePreview(QWidget):
         p.setFont(f2)
         p.setPen(QColor(T.TEXT_MUTED))
         fm = p.fontMetrics()
-        spans = list(zip(xs[:4], xs[1:5])) + [(xs[4], x_end)]
+        spans = [*pairwise(xs[:5]), (xs[4], x_end)]
         for (a, b), t in zip(spans, ("pre", "up", "hold", "down", "cool")):
             if fm.horizontalAdvance(t) + 4 <= b - a:
                 p.drawText(QRectF(a, y0 + 3, b - a, 14), Qt.AlignmentFlag.AlignCenter, t)
@@ -116,7 +118,7 @@ def profile_duration_s(params: dict) -> float:
 
 
 def fmt_duration(s: float) -> str:
-    s = int(round(s))
+    s = round(float(s))
     h, rem = divmod(s, 3600)
     m, sec = divmod(rem, 60)
     if h:

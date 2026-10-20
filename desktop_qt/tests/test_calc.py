@@ -3,7 +3,6 @@ robust Seebeck fit, ohmic verdict needs enough points."""
 
 import math
 import random
-import time
 
 import pytest
 
@@ -75,9 +74,9 @@ def test_polarity_ignores_cooling_and_small_gradients():
 
 
 def _run_fake(temps):
-    from tests.test_session_manager import FakeRig, PARAMS, make, run  # noqa: F401
     from app.core.config import AppConfig
     from app.instruments import session_manager as sm
+    from tests.test_session_manager import PARAMS, FakeRig, make, run  # noqa: F401
     sm_get = sm.get_config
     sm.get_config = lambda: AppConfig()
     try:

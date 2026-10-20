@@ -3,8 +3,13 @@
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QKeySequence, QShortcut
 from PyQt6.QtWidgets import (
-    QApplication, QHBoxLayout, QLabel, QMainWindow, QMessageBox, QStackedWidget,
-    QVBoxLayout, QWidget,
+    QApplication,
+    QHBoxLayout,
+    QMainWindow,
+    QMessageBox,
+    QStackedWidget,
+    QVBoxLayout,
+    QWidget,
 )
 
 from .widgets.header_bar import HeaderBar
@@ -138,8 +143,9 @@ class MainWindow(QMainWindow):
         self.header.set_title(PAGE_TITLES.get(key, LABEL_OF.get(key, key)),
                               SECTION_OF.get(key, ""))
         self.sidebar.set_active(key)
-        if hasattr(page, "on_shown"):
-            page.on_shown()
+        on_shown = getattr(page, "on_shown", None)
+        if callable(on_shown):
+            on_shown()
 
     # ------------------------------------------------------------------
     # Logout
@@ -173,8 +179,7 @@ class MainWindow(QMainWindow):
         Returns True when it is safe to continue (nothing running, or the run
         was stopped), False if the operator cancelled.
         """
-        from ..services.measurement_service import (
-            any_measurement_running, stop_all_measurements)
+        from ..services.measurement_service import any_measurement_running, stop_all_measurements
         if not any_measurement_running():
             return True
         reply = QMessageBox.warning(

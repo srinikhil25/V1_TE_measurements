@@ -1,13 +1,13 @@
 """Top bar — navigation toggle · product · breadcrumb · run state · account menu."""
 
-from PyQt6.QtCore import Qt, QSize, pyqtSignal
+from PyQt6.QtCore import QSize, Qt, pyqtSignal
 from PyQt6.QtGui import QAction
 from PyQt6.QtWidgets import QFrame, QHBoxLayout, QLabel, QMenu, QPushButton, QWidget
 
 from .. import theme as T
 from ..icons import icon as _icon
 from .run_state import fmt_elapsed
-from .ui_kit import Dot, ROLE_LABELS, initials, set_props, vline
+from .ui_kit import ROLE_LABELS, Dot, initials, set_props, vline
 
 
 class HeaderBar(QWidget):
@@ -71,8 +71,8 @@ class HeaderBar(QWidget):
         self.sim_badge = QLabel("SIMULATED RIG")
         self.sim_badge.setObjectName("SimBadge")
         self.sim_badge.setStyleSheet(
-            f"#SimBadge {{ color: #1A1300; background: #F5B83D; border-radius: 4px;"
-            f" padding: 3px 8px; font-weight: 700; letter-spacing: 0.5px; }}")
+            "#SimBadge { color: #1A1300; background: #F5B83D; border-radius: 4px;"
+            " padding: 3px 8px; font-weight: 700; letter-spacing: 0.5px; }")
         self.sim_badge.setToolTip(
             "TE_VISA_BACKEND is set: instruments are simulated (pyvisa-sim). Runs are "
             "saved, but marked as simulated in their provenance. Readings are fixed values.")

@@ -82,7 +82,6 @@ def test_connect_failure_names_the_instrument(monkeypatch):
     from app.core.config import get_config
     from app.instruments import session_manager as sm
     from app.instruments import visa_backend
-
     from app.instruments.instrument import Keithley2700
 
     def not_present(self, rm=None):           # what NI-VISA says for a missing device
@@ -106,9 +105,9 @@ def test_connect_failure_names_the_instrument(monkeypatch):
 
 # ── a dead instrument ends the run, with the reason ───────────────────────
 def test_seebeck_run_stops_when_the_nanovoltmeter_stops_answering():
-    from tests.test_session_manager import FakeRig, PARAMS, make, run
     from app.core.config import AppConfig
     from app.instruments import session_manager as sm
+    from tests.test_session_manager import PARAMS, FakeRig, make, run
 
     class Dead2182A(FakeRig):
         def measure_all(self, temp1_channel=None, temp2_channel=None):

@@ -1,7 +1,7 @@
 """TE Measurement Desktop — application entry point."""
 
-import sys
 import logging
+import sys
 
 # IMPORTANT — keep top-level imports lightweight (no Qt, no heavy C extensions).
 # Python's multiprocessing uses the 'spawn' start method on Windows, which
@@ -55,6 +55,7 @@ def _install_signal_handlers(app) -> None:
     power loss) cannot be caught — that is what the hardware interlock is for.
     """
     import signal
+
     from PyQt6.QtCore import QTimer
 
     def _quit(signum, _frame):
@@ -95,6 +96,7 @@ def main() -> None:
 
     from PyQt6.QtCore import QLockFile
     from PyQt6.QtWidgets import QMessageBox
+
     from app.core.paths import get_app_dir
 
     # One instance only: two copies would fight over the same GPIB

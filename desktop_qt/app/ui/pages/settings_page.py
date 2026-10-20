@@ -7,13 +7,30 @@ the next measurement.
 
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import (
-    QCheckBox, QDoubleSpinBox, QFrame, QGridLayout, QHBoxLayout, QLineEdit, QListWidget,
-    QListWidgetItem, QMessageBox, QScrollArea, QSpinBox, QVBoxLayout, QWidget,
+    QCheckBox,
+    QDoubleSpinBox,
+    QFrame,
+    QGridLayout,
+    QHBoxLayout,
+    QLineEdit,
+    QListWidget,
+    QListWidgetItem,
+    QMessageBox,
+    QScrollArea,
+    QSpinBox,
+    QVBoxLayout,
+    QWidget,
 )
 
 from .. import theme as T
 from ..widgets.ui_kit import (
-    Callout, Panel, button, field, label, page_scaffold, set_props,
+    Callout,
+    Panel,
+    button,
+    field,
+    label,
+    page_scaffold,
+    set_props,
 )
 
 # Roles that may change the rig configuration (it affects every user's runs).
@@ -87,15 +104,15 @@ class SettingsPage(QWidget):
 
         right = QVBoxLayout()
         right.setSpacing(0)
-        self.scroll = QScrollArea()
-        self.scroll.setWidgetResizable(True)
-        self.scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.scroll_area = QScrollArea()
+        self.scroll_area.setWidgetResizable(True)
+        self.scroll_area.setFrameShape(QFrame.Shape.NoFrame)
         content = QWidget()
         self._content_v = QVBoxLayout(content)
         self._content_v.setContentsMargins(0, 0, 8, 16)
         self._content_v.setSpacing(16)
-        self.scroll.setWidget(content)
-        right.addWidget(self.scroll, 1)
+        self.scroll_area.setWidget(content)
+        right.addWidget(self.scroll_area, 1)
 
         if can_config:
             save_bar = self._build_save_bar()     # holds lbl_cfg_msg used while loading
@@ -120,7 +137,7 @@ class SettingsPage(QWidget):
     def _jump(self, idx: int):
         if 0 <= idx < len(self._sections):
             w = self._sections[idx]
-            self.scroll.verticalScrollBar().setValue(w.y())
+            self.scroll_area.verticalScrollBar().setValue(w.y())
 
     # ── Rig configuration ────────────────────────────────────────────
     def _build_config_sections(self):
@@ -337,6 +354,7 @@ class SettingsPage(QWidget):
 
     def _save_config(self) -> None:
         import logging
+
         from ...core import audit
         from ...core.config import ConfigError, diff_configs, get_config, load_warnings, save_config
         old = get_config()

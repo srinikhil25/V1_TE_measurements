@@ -9,14 +9,13 @@ import pytest
 
 from app.services import measurement_service as ms
 
-
 # ── analysis ────────────────────────────────────────────────────────────────
 
 def test_linear_fit_recovers_resistance_and_ignores_offset():
     pts = [{"current": i * 1e-3, "voltage": 2.5 * i * 1e-3 + 40e-6} for i in range(-5, 6)]
     R, R2 = ms._linear_fit_resistance(pts)
-    assert R == pytest.approx(2.5, rel=1e-9)
-    assert R2 == pytest.approx(1.0)
+    assert pytest.approx(2.5, rel=1e-9) == R
+    assert pytest.approx(1.0) == R2
     assert ms._ohmic_status(R2) == "ohmic"
 
 
@@ -24,7 +23,7 @@ def test_linear_fit_skips_missing_points():
     pts = [{"current": 1e-3, "voltage": 1e-3}, {"current": None, "voltage": 5.0},
            {"current": 2e-3, "voltage": 2e-3}]
     R, _ = ms._linear_fit_resistance(pts)
-    assert R == pytest.approx(1.0)
+    assert pytest.approx(1.0) == R
     assert ms._linear_fit_resistance([{"current": 1e-3, "voltage": 1e-3}]) == (None, None)
 
 

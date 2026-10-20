@@ -83,8 +83,8 @@ def record(
     use_current_user: bool = True,
 ) -> bool:
     """Append one entry. Returns True on success; never raises."""
-    from . import database
     from ..models.db_models import AuditEntry
+    from . import database
 
     if use_current_user and user_id is None and username is None:
         u = _current_user()
@@ -125,8 +125,8 @@ def record(
 
 def verify_chain() -> Dict[str, Any]:
     """Recompute the chain. Returns {"ok", "count", "first_bad_id", "problem"}."""
-    from . import database
     from ..models.db_models import AuditEntry
+    from . import database
 
     db = database.SessionLocal()
     try:
@@ -150,8 +150,8 @@ def verify_chain() -> Dict[str, Any]:
 
 def recent(limit: int = 500, measurement_id: Optional[int] = None) -> List[Dict[str, Any]]:
     """Newest entries first, as plain dicts (for the UI)."""
-    from . import database
     from ..models.db_models import AuditEntry
+    from . import database
 
     db = database.SessionLocal()
     try:

@@ -13,7 +13,6 @@ Call ``apply_theme(app)`` once, right after the QApplication is created.
 
 from __future__ import annotations
 
-import os
 import tempfile
 from pathlib import Path
 
@@ -549,7 +548,7 @@ QSS = build_qss()
 def apply_theme(app) -> None:
     """Fusion style + palette + fonts + global style sheet."""
     global _ui_family, _mono_family, QSS
-    from PyQt6.QtGui import QFont, QPalette, QColor
+    from PyQt6.QtGui import QColor, QFont, QPalette
 
     app.setStyle("Fusion")
     _load_bundled_fonts()

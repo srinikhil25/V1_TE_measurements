@@ -1,4 +1,5 @@
 import sqlite3
+from contextlib import closing
 
 import pytest
 
@@ -23,7 +24,7 @@ def test_record_and_verify_chain(app_db):
 def test_update_and_delete_are_blocked(app_db):
     path, _ = app_db
     audit.record("login", username="a", use_current_user=False)
-    with sqlite3.connect(path) as c:
+    with closing(sqlite3.connect(path)) as c, c:
         with pytest.raises(sqlite3.IntegrityError, match="append-only"):
             c.execute("UPDATE audit_trail SET username = 'b'")
         with pytest.raises(sqlite3.IntegrityError, match="append-only"):
@@ -34,7 +35,7 @@ def test_tampering_is_detected(app_db):
     path, _ = app_db
     for i in range(4):
         audit.record("export", details={"n": i}, use_current_user=False)
-    with sqlite3.connect(path) as c:      # an attacker with file access drops the guard
+    with closing(sqlite3.connect(path)) as c, c:      # an attacker with file access drops the guard
         c.execute("DROP TRIGGER audit_trail_no_update")
         c.execute("DROP TRIGGER audit_trail_no_delete")
         c.execute("UPDATE audit_trail SET details = '{\"n\": 99}' WHERE id = 2")
@@ -46,7 +47,7 @@ def test_deleted_middle_entry_is_detected(app_db):
     path, _ = app_db
     for i in range(4):
         audit.record("export", details={"n": i}, use_current_user=False)
-    with sqlite3.connect(path) as c:
+    with closing(sqlite3.connect(path)) as c, c:
         c.execute("DROP TRIGGER audit_trail_no_delete")
         c.execute("DELETE FROM audit_trail WHERE id = 2")
     res = audit.verify_chain()
@@ -60,7 +61,10 @@ def test_record_never_raises_without_table(monkeypatch, tmp_path):
     from app.core import database
     eng = create_engine(f"sqlite:///{tmp_path / 'empty.db'}")
     monkeypatch.setattr(database, "SessionLocal", sessionmaker(bind=eng))
-    assert audit.record("login", use_current_user=False) is False
+    try:
+        assert audit.record("login", use_current_user=False) is False
+    finally:
+        eng.dispose()
 
 
 def test_current_user_is_attributed(app_db, monkeypatch):

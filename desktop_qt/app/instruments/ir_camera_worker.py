@@ -73,14 +73,15 @@ def _run_otc(q, otc_sdk_dir: str) -> None:
         sys.path.insert(0, bindings)
     os.environ.setdefault("OTC_SDK_DIR", otc_sdk_dir)
 
-    import optris.otcsdk as otc  # may raise or crash — isolated in this subprocess
+    # Vendor SDK, only on the lab PC (bindings path added above).
+    import optris.otcsdk as otc  # pyright: ignore[reportMissingImports]
 
     # ── IRImagerClient subclass ──────────────────────────────────────────────
     # Defined after the import so the class can close over `otc` to check the
     # FlagState.  The base class may or may not exist in older binding versions.
     _base = getattr(otc, "IRImagerClient", object)
 
-    class _Client(_base):
+    class _Client(_base):  # pyright: ignore[reportGeneralTypeIssues]
         def __init__(self, imager):
             if _base is not object:
                 try:
@@ -184,7 +185,7 @@ def _run_legacy(q, dll_path: str, config_path: str) -> None:
     if not os.path.isfile(config_path):
         raise FileNotFoundError(f"Legacy config not found: {config_path}")
 
-    import pyOptris
+    import pyOptris  # pyright: ignore[reportMissingImports]  (not installed in CI)
 
     _log("  load_DLL …")
     pyOptris.load_DLL(dll_path)

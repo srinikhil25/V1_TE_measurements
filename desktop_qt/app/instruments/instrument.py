@@ -1,10 +1,10 @@
-import pyvisa
-import time
-from typing import Optional, Dict, List, Tuple
 import logging
+import time
+from typing import Any, Dict, List, Optional
 
 from .visa_backend import resource_manager
-from .visa_guard import guard, report_failure, transaction as _txn, write_once
+from .visa_guard import guard, report_failure, write_once
+from .visa_guard import transaction as _txn
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -13,8 +13,7 @@ ADDR_2182A = "GPIB0::7::INSTR"
 ADDR_2700 = "GPIB0::16::INSTR"
 ADDR_PK480M = "GPIB0::15::INSTR"   # Matsusada PK4-80M heater supply (was PK160)
 ADDR_PK160 = ADDR_PK480M           # backward-compat alias
-ADDR_6221 = "GPIB0::24::INSTR"  # Default address, will be updated after discovery
-ADDR_2401 = "GPIB0::24::INSTR"  # Keithley 2401 SourceMeter (replaced the 6221 at this address)
+ADDR_2401 = "GPIB0::24::INSTR"  # Keithley 2401 SourceMeter (I-V)
 
 # Keithley 2700 thermocouple channels for the two Seebeck geometries.
 # In-plane uses scanner-card positions 2 & 4; out-of-plane uses positions 3 & 5.
@@ -59,16 +58,16 @@ class Keithley2182A:
     def __init__(self, resource_name: str = ADDR_2182A):
         self.resource_name = resource_name
         self.last_error = None
-        self.instrument = None
+        self.instrument: Any = None   # GuardedResource proxy once connected
         self.connected = False
     def connect(self, rm=None):
         # Disconnect first if already connected
         if self.connected and self.instrument:
             try:
                 self.disconnect()
-            except:
+            except Exception:
                 pass
-        
+
         try:
             if rm is None:
                 rm = resource_manager()
@@ -84,14 +83,14 @@ class Keithley2182A:
             self.last_error = error_str
             logger.error(f"Failed to connect to Keithley 2182A: {error_str}")
             print(f"Failed to connect to Keithley 2182A: {error_str}")
-            
+
             # Provide helpful error messages
             if "VI_ERROR_ALLOC" in error_str or "-1073807300" in error_str:
                 logger.error("VI_ERROR_ALLOC: Resource allocation failed. Possible causes:")
                 logger.error("  1. Another process is using this instrument")
                 logger.error("  2. Previous connections weren't closed properly")
                 logger.error("  3. Try restarting the backend server or closing other applications")
-            
+
             self.connected = False
             self.instrument = None
             return False
@@ -100,7 +99,7 @@ class Keithley2182A:
             try:
                 self.instrument.close()
             except Exception as e:
-                logger.warning(f"Error closing 2182A connection: {str(e)}")
+                logger.warning(f"Error closing 2182A connection: {e!s}")
             finally:
                 self.instrument = None
                 self.connected = False
@@ -144,8 +143,8 @@ class Keithley2182A:
             print(f"2182A Voltage: {value}")
             return value
         except Exception as e:
-            logger.error(f"Failed to read voltage from 2182A: {str(e)}")
-            print(f"Failed to read voltage from 2182A: {str(e)}")
+            logger.error(f"Failed to read voltage from 2182A: {e!s}")
+            print(f"Failed to read voltage from 2182A: {e!s}")
             return None
 
 class PK480M:
@@ -174,14 +173,14 @@ class PK480M:
     def __init__(self, resource_name: str = ADDR_PK480M):
         self.resource_name = resource_name
         self.last_error = None
-        self.instrument = None
+        self.instrument: Any = None   # GuardedResource proxy once connected
         self.connected = False
     def connect(self, rm=None):
         # Disconnect first if already connected
         if self.connected and self.instrument:
             try:
                 self.disconnect()
-            except:
+            except Exception:
                 pass
 
         try:
@@ -227,7 +226,7 @@ class PK480M:
             try:
                 self.instrument.close()
             except Exception as e:
-                logger.warning(f"Error closing PK4-80M connection: {str(e)}")
+                logger.warning(f"Error closing PK4-80M connection: {e!s}")
             finally:
                 self.instrument = None
                 self.connected = False
@@ -252,7 +251,7 @@ class PK480M:
             time.sleep(0.1)
             self.instrument.write(f"#1 ICN {icn:.3f}")    # current LIMIT (ceiling)
             self.instrument.write(f"#1 OVP {ovp_percent}")
-            self.instrument.write(f"#1 VCN 0")            # voltage 0 → no output yet
+            self.instrument.write("#1 VCN 0")            # voltage 0 → no output yet
             time.sleep(0.1)
             self.instrument.write("#1 SW1")               # output on (VCN=0 → no drive)
             time.sleep(0.3)
@@ -378,7 +377,7 @@ class Keithley2700:
     def __init__(self, resource_name: str = ADDR_2700):
         self.resource_name = resource_name
         self.last_error = None
-        self.instrument = None
+        self.instrument: Any = None   # GuardedResource proxy once connected
         self.connected = False
         self.measurement_data = []
         self.open_tc_detect = True   # set from the rig config by SeebeckSystem
@@ -387,9 +386,9 @@ class Keithley2700:
         if self.connected and self.instrument:
             try:
                 self.disconnect()
-            except:
+            except Exception:
                 pass
-        
+
         try:
             if rm is None:
                 rm = resource_manager()
@@ -405,10 +404,10 @@ class Keithley2700:
             self.last_error = error_str
             logger.error(f"Failed to connect to Keithley 2700: {error_str}")
             print(f"Failed to connect to Keithley 2700: {error_str}")
-            
+
             if "VI_ERROR_ALLOC" in error_str or "-1073807300" in error_str:
                 logger.error("VI_ERROR_ALLOC: Resource allocation failed. Check for other processes using this instrument.")
-            
+
             self.connected = False
             self.instrument = None
             return False
@@ -417,7 +416,7 @@ class Keithley2700:
             try:
                 self.instrument.close()
             except Exception as e:
-                logger.warning(f"Error closing 2700 connection: {str(e)}")
+                logger.warning(f"Error closing 2700 connection: {e!s}")
             finally:
                 self.instrument = None
                 self.connected = False
@@ -478,8 +477,8 @@ class Keithley2700:
             print(f"2700 Measurement on channel {channel}: {value}")
             return value
         except Exception as e:
-            logger.error(f"Failed to take measurement on 2700: {str(e)}")
-            print(f"Failed to take measurement on 2700: {str(e)}")
+            logger.error(f"Failed to take measurement on 2700: {e!s}")
+            print(f"Failed to take measurement on 2700: {e!s}")
             return None
     def read_dc_voltage(self, channel: int = CH_HEATER_VOLT) -> Optional[float]:
         """Read a DC-volts channel (e.g. ch116 heater-supply monitor).
@@ -529,198 +528,14 @@ class Keithley2700:
             print(f"2700 Instrument status: {status}")
             return status
         except Exception as e:
-            logger.error(f"Failed to get status on 2700: {str(e)}")
-            print(f"Failed to get status on 2700: {str(e)}")
-            return {"connected": False}
-
-class Keithley6221:
-    """Keithley 6221 SourceMeter for current-voltage measurements and resistivity calculations."""
-    def __init__(self, resource_name: str = ADDR_6221):
-        self.resource_name = resource_name
-        self.last_error = None
-        self.instrument = None
-        self.connected = False
-
-    def connect(self, rm=None):
-        # Disconnect first if already connected
-        if self.connected and self.instrument:
-            try:
-                self.disconnect()
-            except:
-                pass
-        try:
-            if rm is None:
-                rm = resource_manager()
-            self.instrument = guard(rm.open_resource(self.resource_name), "Keithley 6221",
-                                    address=self.resource_name)
-            self.instrument.timeout = 20000
-            self.connected = True
-            logger.info(f"Connected to Keithley 6221 at {self.resource_name}")
-            print(f"Connected to Keithley 6221 at {self.resource_name}")
-            return True
-        except Exception as e:
-            error_str = str(e)
-            self.last_error = error_str
-            logger.error(f"Failed to connect to Keithley 6221: {error_str}")
-            print(f"Failed to connect to Keithley 6221: {error_str}")
-            if "VI_ERROR_ALLOC" in error_str or "-1073807300" in error_str:
-                logger.error("VI_ERROR_ALLOC: Resource allocation failed. Check for other processes using this instrument.")
-            self.connected = False
-            self.instrument = None
-            return False
-
-    def disconnect(self):
-        if self.instrument:
-            try:
-                self.instrument.close()
-            except Exception as e:
-                logger.warning(f"Error closing 6221 connection: {str(e)}")
-            finally:
-                self.instrument = None
-                self.connected = False
-                logger.info("Disconnected Keithley 6221")
-                print("Disconnected Keithley 6221")
-
-    def configure_voltage_source(self, voltage_limit: float = 1.0, current_limit: float = 0.1):
-        """Configure 6221 as voltage source with limits."""
-        if not self.connected:
-            return False
-        try:
-            self.instrument.write("*RST")
-            time.sleep(0.5)
-            self.instrument.write(":SOUR:FUNC VOLT")
-            self.instrument.write(":SOUR:VOLT:LEV 0")
-            self.instrument.write(f":SOUR:VOLT:RANG {abs(voltage_limit)}")
-            self.instrument.write(f":SENS:CURR:PROT {abs(current_limit)}")
-            self.instrument.write(":SENS:FUNC 'CURR'")
-            self.instrument.write(":SENS:CURR:RANG:AUTO ON")
-            self.instrument.write(":FORM:ELEM CURR, VOLT")
-            logger.info(f"Configured 6221: V_limit={voltage_limit}V, I_limit={current_limit}A")
-            print(f"Configured 6221: V_limit={voltage_limit}V, I_limit={current_limit}A")
-            return True
-        except Exception as e:
-            logger.error(f"Failed to configure 6221: {str(e)}")
-            print(f"Failed to configure 6221: {str(e)}")
-            return False
-
-    def configure_current_source(self, current_limit: float = 0.01, voltage_limit: float = 1.0):
-        """Configure 6221 as current source with limits."""
-        if not self.connected:
-            return False
-        try:
-            self.instrument.write("*RST")
-            time.sleep(0.5)
-            self.instrument.write(":SOUR:FUNC CURR")
-            self.instrument.write(":SOUR:CURR:LEV 0")
-            self.instrument.write(f":SOUR:CURR:RANG {abs(current_limit)}")
-            self.instrument.write(f":SENS:VOLT:PROT {abs(voltage_limit)}")
-            self.instrument.write(":SENS:FUNC 'VOLT'")
-            self.instrument.write(":SENS:VOLT:RANG:AUTO ON")
-            self.instrument.write(":FORM:ELEM VOLT, CURR")
-            logger.info(f"Configured 6221: I_limit={current_limit}A, V_limit={voltage_limit}V")
-            print(f"Configured 6221: I_limit={current_limit}A, V_limit={voltage_limit}V")
-            return True
-        except Exception as e:
-            logger.error(f"Failed to configure 6221: {str(e)}")
-            print(f"Failed to configure 6221: {str(e)}")
-            return False
-
-    def set_voltage(self, voltage: float):
-        if not self.connected:
-            return False
-        try:
-            self.instrument.write(f":SOUR:VOLT:LEV {voltage}")
-            logger.info(f"6221 set voltage: {voltage}V")
-            return True
-        except Exception as e:
-            logger.error(f"Failed to set voltage on 6221: {str(e)}")
-            return False
-
-    def set_current(self, current: float):
-        if not self.connected:
-            return False
-        try:
-            self.instrument.write(f":SOUR:CURR:LEV {current}")
-            logger.info(f"6221 set current: {current}A")
-            return True
-        except Exception as e:
-            logger.error(f"Failed to set current on 6221: {str(e)}")
-            return False
-
-    def output_on(self):
-        if not self.connected:
-            return False
-        try:
-            self.instrument.write(":OUTP ON")
-            logger.info("6221 output ON")
-            return True
-        except Exception as e:
-            logger.error(f"Failed to turn on 6221 output: {str(e)}")
-            return False
-
-    def output_off(self):
-        if not self.connected:
-            return False
-        try:
-            self.instrument.write(":OUTP OFF")
-            logger.info("6221 output OFF")
-            return True
-        except Exception as e:
-            logger.error(f"Failed to turn off 6221 output: {str(e)}")
-            return False
-
-    def read_measurement(self) -> Optional[Dict[str, float]]:
-        if not self.connected:
-            return None
-        try:
-            with _txn(self.instrument):
-                self.instrument.write(":INIT")
-                time.sleep(0.1)
-                response = self.instrument.query(":FETCH?")
-            values = response.strip().split(',')
-            if len(values) >= 2:
-                try:
-                    val1 = float(values[0])
-                    val2 = float(values[1])
-                    # Heuristic: larger magnitude likely voltage
-                    if abs(val1) > abs(val2) or abs(val1) < 0.001:
-                        voltage = val1
-                        current = val2
-                    else:
-                        current = val1
-                        voltage = val2
-                    resistance = voltage / current if abs(current) > 1e-12 else None
-                    return {
-                        "voltage": voltage,
-                        "current": current,
-                        "resistance": resistance,
-                    }
-                except ValueError:
-                    logger.error(f"Failed to parse 6221 response: {response}")
-                    return None
-            return None
-        except Exception as e:
-            logger.error(f"Failed to read measurement from 6221: {str(e)}")
-            print(f"Failed to read measurement from 6221: {str(e)}")
-            return None
-
-    def get_status(self) -> Dict:
-        try:
-            if not self.connected:
-                return {"connected": False}
-            return {
-                "connected": True,
-                "resource_name": self.resource_name
-            }
-        except Exception as e:
-            logger.error(f"Failed to get status on 6221: {str(e)}")
+            logger.error(f"Failed to get status on 2700: {e!s}")
+            print(f"Failed to get status on 2700: {e!s}")
             return {"connected": False}
 
 class Keithley2401:
     """Keithley 2401 SourceMeter (SMU) for I-V sweeps.
 
-    A single instrument that SOURCES and MEASURES, replacing the old
-    6221 (source) + 2182A (measure) pair for I-V:
+    A single instrument that SOURCES and MEASURES for I-V:
       - source_mode "current": source I, measure V  (compliance = voltage limit)
       - source_mode "voltage": source V, measure I  (compliance = current limit)
     Supports 4-wire remote sense (true 4-probe, needs sense leads) or 2-wire.
@@ -729,7 +544,7 @@ class Keithley2401:
     def __init__(self, resource_name: str = ADDR_2401):
         self.resource_name = resource_name
         self.last_error = None
-        self.instrument = None
+        self.instrument: Any = None   # GuardedResource proxy once connected
         self.connected = False
         self._source_mode = "current"
 
@@ -867,12 +682,11 @@ class SeebeckSystem:
         # closed on every disconnect_all(). Reusing a single long-lived RM does
         # not fully release the GPIB resources between runs — recreating it is
         # the in-process equivalent of restarting the application.
-        self.rm = None
+        self.rm: Any = None
         self.k2182a = Keithley2182A()
         self.k2700 = Keithley2700()
         self.pk = PK480M()
         self.pk160 = self.pk          # backward-compat alias
-        self.k6221 = Keithley6221()   # legacy; hardware replaced by the 2401
         self.k2401 = Keithley2401()   # SourceMeter for I-V (GPIB 24)
         self.connected = False
         self.connect_failures: List[str] = []   # set by connect_all()
@@ -935,7 +749,7 @@ class SeebeckSystem:
             'k2182a': self.k2182a.connect(self.rm),
             'k2700': self.k2700.connect(self.rm),
             'pk160': self.pk160.connect(self.rm),
-            'k2401': self.k2401.connect(self.rm)   # SourceMeter (was 6221) at GPIB 24
+            'k2401': self.k2401.connect(self.rm)   # SourceMeter at GPIB 24
         }
 
         # Log connection status; apply the configured VISA timeout per instrument.
@@ -1097,45 +911,6 @@ class SeebeckSystem:
             "HeaterV_V": heater_v,
             "HeaterI_A": heater_i,
         }
-    
-    # -------------------------------------------------------------------------
-    # I-V measurement: 4-probe (6221 current source + 2182A voltmeter)
-    # -------------------------------------------------------------------------
-
-    def prepare_iv_4probe(
-        self,
-        voltage_limit: float = 1.0,
-        current_limit: float = 0.1,
-        nplc: float = 5.0,
-    ) -> bool:
-        """Configure 6221 as current source and 2182A for voltage. Call before measure_iv_point_4probe."""
-        if not self.k6221.connected or not self.k2182a.connected:
-            return False
-        self.k2182a.configure(nplc=nplc)
-        ok = self.k6221.configure_current_source(
-            current_limit=abs(current_limit),
-            voltage_limit=abs(voltage_limit),
-        )
-        if ok:
-            self.k6221.output_on()
-        return ok
-
-    def measure_iv_point_4probe(
-        self, current_A: float, delay_s: float
-    ) -> Optional[Dict[str, float]]:
-        """Set current on 6221, wait delay_s, read voltage from 2182A. Returns {current, voltage, resistance}."""
-        if not self.k6221.set_current(current_A):
-            return None
-        time.sleep(delay_s)
-        v = self.k2182a.read_voltage()
-        if v is None:
-            return None
-        r = v / current_A if abs(current_A) > 1e-12 else None
-        return {
-            "current": current_A,
-            "voltage": v,
-            "resistance": r,
-        }
 
     def get_temperature_avg_c(self, ch1: int = 102, ch2: int = 104) -> Optional[float]:
         """Read 2700 channels ch1 and ch2, return average temperature in °C (for IV metadata)."""
@@ -1150,102 +925,3 @@ class SeebeckSystem:
         if t2 is None:
             return t1
         return (t1 + t2) / 2.0
-
-    def measure_resistivity(self, length: float, width: float, thickness: float, 
-                           voltage: Optional[float] = None, current: Optional[float] = None) -> Dict[str, Optional[float]]:
-        """
-        Measure electrical resistivity using 6221 SourceMeter.
-        
-        Parameters:
-            length: Sample length in meters
-            width: Sample width in meters  
-            thickness: Sample thickness in meters
-            voltage: Applied voltage (V). If None, uses current source mode.
-            current: Applied current (A). If None and voltage is None, uses default 0.01A.
-        
-        Returns:
-            Dictionary with voltage, current, resistance, resistivity, and conductivity
-        """
-        if not self.k6221.connected:
-            logger.error("Keithley 6221 not connected")
-            return {
-                "voltage": None,
-                "current": None,
-                "resistance": None,
-                "resistivity": None,
-                "conductivity": None,
-                "error": "Keithley 6221 not connected"
-            }
-        
-        try:
-            # Configure based on input
-            if voltage is not None:
-                # Voltage source mode
-                self.k6221.configure_voltage_source(voltage_limit=abs(voltage) * 1.2, current_limit=0.1)
-                self.k6221.set_voltage(voltage)
-            else:
-                # Current source mode
-                applied_current = current if current is not None else 0.01
-                self.k6221.configure_current_source(current_limit=abs(applied_current) * 1.2, voltage_limit=1.0)
-                self.k6221.set_current(applied_current)
-            
-            # Turn on output
-            self.k6221.output_on()
-            time.sleep(0.5)  # Wait for stabilization
-            
-            # Read measurement
-            measurement = self.k6221.read_measurement()
-            
-            # Turn off output
-            self.k6221.output_off()
-            
-            if measurement is None:
-                return {
-                    "voltage": None,
-                    "current": None,
-                    "resistance": None,
-                    "resistivity": None,
-                    "conductivity": None,
-                    "error": "Failed to read measurement"
-                }
-            
-            v = measurement.get("voltage")
-            i = measurement.get("current")
-            r = measurement.get("resistance")
-            
-            # Calculate resistivity: ρ = R * A / L
-            # where A = width * thickness (cross-sectional area)
-            # and L = length
-            resistivity = None
-            conductivity = None
-            
-            if r is not None and r > 0:
-                cross_sectional_area = width * thickness  # m²
-                if cross_sectional_area > 0 and length > 0:
-                    resistivity = r * cross_sectional_area / length  # Ω·m
-                    if resistivity > 0:
-                        conductivity = 1.0 / resistivity  # S/m
-            
-            return {
-                "voltage": v,
-                "current": i,
-                "resistance": r,
-                "resistivity": resistivity,  # Ω·m
-                "conductivity": conductivity,  # S/m
-                "length": length,  # m
-                "width": width,  # m
-                "thickness": thickness,  # m
-                "cross_sectional_area": width * thickness  # m²
-            }
-            
-        except Exception as e:
-            logger.error(f"Failed to measure resistivity: {str(e)}")
-            self.k6221.output_off()
-            return {
-                "voltage": None,
-                "current": None,
-                "resistance": None,
-                "resistivity": None,
-                "conductivity": None,
-                "error": str(e)
-            } 

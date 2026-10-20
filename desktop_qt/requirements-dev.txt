@@ -3,3 +3,6 @@
 pytest>=8.0
 pytest-qt>=4.4
 pyvisa-sim>=0.6     # simulated rig: tests/test_sim_rig.py, TE_VISA_BACKEND=sim
+pytest-cov>=7.0     # coverage gate (see [tool.coverage] in pyproject.toml)
+ruff>=0.17          # lint:  ruff check
+pyright>=1.1.400    # types: pyright

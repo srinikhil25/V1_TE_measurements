@@ -171,7 +171,7 @@ def test_connect_failure_reports_error_and_releases(cfg):
 def test_run_is_saved_row_by_row_with_outcome(cfg, app_db, monkeypatch):
     from datetime import datetime
 
-    from app.models.db_models import Lab, Measurement, MeasurementIntegrity, MeasurementRow, User
+    from app.models.db_models import Measurement, MeasurementIntegrity, MeasurementRow, User
 
     _path, factory = app_db
     s = factory()

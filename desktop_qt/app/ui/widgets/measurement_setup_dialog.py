@@ -10,7 +10,12 @@ Returns the profile params (get_profile_params) + cooling target on accept.
 from __future__ import annotations
 
 from PyQt6.QtWidgets import (
-    QDialog, QDoubleSpinBox, QFrame, QHBoxLayout, QMessageBox, QVBoxLayout,
+    QDialog,
+    QDoubleSpinBox,
+    QFrame,
+    QHBoxLayout,
+    QMessageBox,
+    QVBoxLayout,
 )
 
 from .ui_kit import Panel, button, label

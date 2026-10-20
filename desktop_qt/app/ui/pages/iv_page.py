@@ -8,27 +8,51 @@ Right : result readouts (R, ρ, σ, R², ohmic check …) · I-V chart · points
 from __future__ import annotations
 
 import math
-import os
-import tempfile
-from typing import Dict, List, Optional
+from types import SimpleNamespace
+from typing import Callable, Dict, List, Optional
 
 import pyqtgraph as pg
-from openpyxl import Workbook
-from openpyxl.drawing.image import Image as XLImage
-from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer
+from PyQt6.QtCore import Qt, QThread, QTimer, pyqtSignal
 from PyQt6.QtWidgets import (
-    QAbstractSpinBox, QCheckBox, QDoubleSpinBox, QFileDialog, QFrame, QGridLayout,
-    QHBoxLayout, QLineEdit, QMessageBox, QProgressBar, QScrollArea, QSpinBox,
-    QSplitter, QVBoxLayout, QWidget,
+    QAbstractSpinBox,
+    QCheckBox,
+    QDoubleSpinBox,
+    QFrame,
+    QGridLayout,
+    QHBoxLayout,
+    QLineEdit,
+    QMessageBox,
+    QProgressBar,
+    QScrollArea,
+    QSpinBox,
+    QSplitter,
+    QVBoxLayout,
+    QWidget,
 )
 
+from ...services.run_export import RunTable, info_lines, iv_info, iv_table
 from .. import theme as T
+from ..widgets.export_ui import save_data, save_graphs
 from ..widgets.tile import icon_button
 from ..widgets.ui_kit import (
-    Callout, set_field_error,
+    Callout,
+    LegendStrip,
+    Panel,
+    Readout,
+    ReadoutGrid,
+    Segmented,
+    button,
+    cell,
+    field,
+    fmt_sci,
+    label,
+    make_table,
     ohmic_label,
-    LegendStrip, Panel, Readout, ReadoutGrid, Segmented, button, cell, field, fmt_sci,
-    label, make_table, page_scaffold, pen, set_props, style_plot,
+    page_scaffold,
+    pen,
+    set_field_error,
+    set_props,
+    style_plot,
 )
 
 # Display-unit scaling for the display settings. Data is stored in SI
@@ -56,10 +80,14 @@ class IVWorker(QThread):
     def run(self):
         try:
             from ...services.measurement_service import run_iv_sweep
-            abort_check = None
-            if self._abort_flag is not None:
-                abort_check = lambda: getattr(self._abort_flag, "abort_requested", False)
-            progress_cb = lambda i, pt: self.progress.emit(i, pt)
+            flag = self._abort_flag
+            abort_check: Optional[Callable[[], bool]] = None
+            if flag is not None:
+                abort_check = lambda: bool(getattr(flag, "abort_requested", False))  # noqa: E731
+
+            def progress_cb(i, pt):
+                self.progress.emit(i, pt)
+
             result = run_iv_sweep(
                 progress_callback=progress_cb,
                 abort_check=abort_check,
@@ -121,13 +149,16 @@ class IVPage(QWidget):
         super().__init__()
         self._user = user
         self._worker: Optional[IVWorker] = None
-        self._abort_flag = type("AbortFlag", (), {"abort_requested": False})()
+        self._abort_flag = SimpleNamespace(abort_requested=False)
         self._results: List[Dict] = []
         self._result_summary: Dict = {}  # fit_R, fit_R_squared, ohmic_status, temperature_C
         self._v_unit, self._v_scale = "V", 1.0
         self._i_unit, self._i_scale = "A", 1.0
         self._show_fit = True
         self._iv_cf = None
+        self._run_id: Optional[int] = None
+        self._sweep_params: Dict = {}
+        self._rho_notes: List[str] = []
         pg.setConfigOptions(antialias=True)
         self._build_ui()
 
@@ -498,6 +529,7 @@ class IVPage(QWidget):
         self.table.setRowCount(0)
         self._results.clear()
         self._result_summary.clear()
+        self._run_id = None
         self._update_metric_cards()
         total = self.sb_points.value() * (2 if self.cb_bidirectional.isChecked() else 1)
         self.progress.setRange(0, total)
@@ -543,6 +575,8 @@ class IVPage(QWidget):
             _lab_id=lab_id,
         )
 
+        self._sweep_params = params
+        self._rho_notes = self._geometry_notes()
         self._worker = IVWorker(params, self._abort_flag)
         self._worker.finished.connect(self._on_done)
         self._worker.error.connect(self._on_error)
@@ -583,6 +617,7 @@ class IVPage(QWidget):
 
         n = len(self._results)
         mid = result.get("measurement_id")
+        self._run_id = mid
         msg = f"Done — {n} points."
         if mid is not None:
             msg += f" Saved to the run library as #{mid}."
@@ -686,109 +721,28 @@ class IVPage(QWidget):
     # Export
     # ------------------------------------------------------------------
 
-    def _table_rows(self):
-        """(headers, rows) shared by the CSV and Excel exporters."""
-        headers = ["Current (A)", "Voltage (V)", "Resistance (Ohm)", "Power (mW)",
-                   "Resistivity (Ohm.cm)", "Conductivity (S/cm)"]
-        rows = []
-        for pt in self._results:
-            i = pt.get("current")
-            v = pt.get("voltage")
-            r = pt.get("resistance")
-            p = (v * i * 1000) if (v is not None and i is not None) else None
-            rows.append([i, v, r, p, pt.get("resistivity"), pt.get("conductivity")])
-        return headers, rows
+    def _export_args(self) -> dict:
+        return {"kind": "iv", "run_id": self._run_id,
+                "sample": self.le_sample_id.text().strip() or None}
+
+    def _run_table(self) -> RunTable:
+        p = self._sweep_params
+        info = info_lines(kind="I-V sweep", run_id=self._run_id,
+                          sample=p.get("sample_id"), operator=p.get("operator"),
+                          extra=iv_info(p))
+        s = self._result_summary
+        return iv_table(self._results, fit_R=s.get("fit_R"), fit_R2=s.get("fit_R_squared"),
+                        ohmic=s.get("ohmic_status"), temperature_C=s.get("temperature_C"),
+                        cf=self._iv_cf, rho_notes=self._rho_notes, info=info)
 
     def _export_data(self):
-        """Save the sweep. Excel (.xlsx) embeds the I-V graph; CSV is data-only."""
-        if not self._results:
-            QMessageBox.information(self, "Save data", "There is no data to save. Run a sweep first.")
-            return
-        path, selected_filter = QFileDialog.getSaveFileName(
-            self, "Save I-V data", "iv_data.xlsx",
-            "Excel workbook (*.xlsx);;CSV file (*.csv)")
-        if not path:
-            return
-        try:
-            if selected_filter.startswith("CSV") or path.lower().endswith(".csv"):
-                if not path.lower().endswith(".csv"):
-                    path += ".csv"
-                self._write_csv(path)
-                QMessageBox.information(self, "Save data", f"CSV saved to:\n{path}")
-            else:
-                if not path.lower().endswith(".xlsx"):
-                    path += ".xlsx"
-                self._export_excel_with_graph(path)
-        except Exception as e:
-            QMessageBox.critical(self, "Save data", str(e))
-
-    def _write_csv(self, path: str):
-        import csv
-        headers, rows = self._table_rows()
-        with open(path, "w", newline="", encoding="utf-8") as f:
-            w = csv.writer(f)
-            w.writerow(headers)
-            for row in rows:
-                w.writerow(["" if v is None else v for v in row])
-
-    def _export_excel_with_graph(self, path: str):
-        """Write the data sheet + a fit summary and embed the I-V chart PNG."""
-        wb = Workbook()
-        ws = wb.active
-        ws.title = "Data"
-        headers, rows = self._table_rows()
-        ws.append(headers)
-        for row in rows:
-            ws.append(["" if v is None else v for v in row])
-
-        s = self._result_summary
-        ws.append([])
-        ws.append(["Fit R (Ohm)", s.get("fit_R")])
-        ws.append(["R^2", s.get("fit_R_squared")])
-        ws.append(["Ohmic status", s.get("ohmic_status")])
-        ws.append(["Temperature (C)", s.get("temperature_C")])
-        ws.append(["4PP correction factor CF", getattr(self, "_iv_cf", None)])
-
-        try:
-            import PIL  # type: ignore  # noqa: F401
-            tmpdir = tempfile.mkdtemp(prefix="iv_graph_")
-            fp = None
-            pix = self.chart.grab()
-            if not pix.isNull():
-                fp = os.path.join(tmpdir, "iv_chart.png")
-                pix.save(fp, "PNG")
-                ws.add_image(XLImage(fp), f"A{len(rows) + 9}")
-            wb.save(path)
-            if fp:
-                try:
-                    os.remove(fp)
-                except OSError:
-                    pass
-            try:
-                os.rmdir(tmpdir)
-            except OSError:
-                pass
-            QMessageBox.information(self, "Save data", f"Excel workbook saved to:\n{path}")
-        except ImportError:
-            wb.save(path)
-            QMessageBox.warning(
-                self, "Save data",
-                "Excel file saved without the embedded graph.\n\n"
-                "To include the graph, install Pillow:\n  pip install pillow")
+        """Excel: readings, fit summary, I-V chart and run details. CSV: readings."""
+        save_data(self, self._run_table(), charts=[("I-V characteristic", self.chart)],
+                  **self._export_args())
 
     def _save_graph(self):
-        path, _ = QFileDialog.getSaveFileName(self, "Save graph", "iv_chart.png", "PNG (*.png)")
-        if not path:
-            return
-        try:
-            pix = self.chart.grab()
-            if pix.isNull():
-                QMessageBox.warning(self, "Save graph", "The chart image is empty.")
-                return
-            pix.save(path, "PNG")
-            QMessageBox.information(self, "Save graph", f"Saved to:\n{path}")
-        except Exception as e:
-            QMessageBox.critical(self, "Save graph", str(e))
+        save_graphs(self, [(self.chart, "graph")], has_data=bool(self._results),
+                    **self._export_args())
 
 
 def fit_offset(points, R) -> float:

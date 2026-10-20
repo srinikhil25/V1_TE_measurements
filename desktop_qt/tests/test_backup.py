@@ -1,4 +1,5 @@
 import sqlite3
+from contextlib import closing
 from datetime import date, timedelta
 
 from app.core import backup
@@ -6,7 +7,7 @@ from app.core import backup
 
 def _db(tmp_path):
     p = tmp_path / "live.db"
-    with sqlite3.connect(p) as c:
+    with closing(sqlite3.connect(p)) as c, c:
         c.execute("PRAGMA journal_mode=WAL")
         c.execute("CREATE TABLE t (x)")
         c.execute("INSERT INTO t VALUES (42)")
@@ -21,7 +22,7 @@ def test_daily_backup_once_per_day_and_verified(tmp_path):
     first = backup.daily_backup(str(src), folder=folder, today=today)
     assert first is not None and first.name == "te_measurement-20261019.db"
     assert backup.daily_backup(str(src), folder=folder, today=today) is None   # same day
-    with sqlite3.connect(first) as c:
+    with closing(sqlite3.connect(first)) as c, c:
         assert c.execute("SELECT x FROM t").fetchone()[0] == 42
 
 

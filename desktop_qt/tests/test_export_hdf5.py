@@ -8,8 +8,7 @@ import pytest
 h5py = pytest.importorskip("h5py")
 
 from app.core.run_context import build_run_context  # noqa: E402
-from app.models.db_models import (  # noqa: E402
-    Measurement, MeasurementIntegrity, MeasurementRow)
+from app.models.db_models import Measurement, MeasurementIntegrity, MeasurementRow  # noqa: E402
 from app.services.export_hdf5 import export_measurement  # noqa: E402
 
 

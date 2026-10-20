@@ -2,16 +2,33 @@
 
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
-    QCheckBox, QComboBox, QDialog, QFrame, QGridLayout, QHBoxLayout, QLineEdit, QMessageBox,
-    QVBoxLayout, QWidget,
+    QCheckBox,
+    QComboBox,
+    QDialog,
+    QFrame,
+    QHBoxLayout,
+    QLineEdit,
+    QMessageBox,
+    QVBoxLayout,
+    QWidget,
 )
 
 from ...core import audit
 from .. import theme as T
 from ..icons import icon as _icon
 from ..widgets.ui_kit import (
-    EmptyState, Panel, ROLE_LABELS, button, cell, chip_cell, field, hide_item_text, initials, label,
-    make_table, page_scaffold, set_props,
+    ROLE_LABELS,
+    EmptyState,
+    Panel,
+    button,
+    cell,
+    chip_cell,
+    field,
+    hide_item_text,
+    initials,
+    label,
+    make_table,
+    page_scaffold,
 )
 
 _ROLES = ["researcher", "lab_admin", "super_admin"]
@@ -25,7 +42,7 @@ _ROLE_HELP = {
 class _UserDialog(QDialog):
     """Add / edit user dialog."""
 
-    def __init__(self, parent=None, user_data: dict = None):
+    def __init__(self, parent=None, user_data: dict | None = None):
         super().__init__(parent)
         self._editing = user_data is not None
         self.setWindowTitle("Edit user" if self._editing else "Add user")
@@ -170,7 +187,7 @@ class UsersPage(QWidget):
 
         db = SessionLocal()
         try:
-            self._users = [dict(id=u.id, username=u.username, email=u.email, role=u.role,
+            self._users: list[dict] = [dict(id=u.id, username=u.username, email=u.email, role=u.role,
                                 active=u.active, last_login=u.last_login, created_at=u.created_at)
                            for u in db.query(User).order_by(User.id).all()]
         finally:
@@ -183,7 +200,7 @@ class UsersPage(QWidget):
             t.setCellWidget(i, 0, self._user_cell(u))
             hide_item_text(t, i, 0)
             t.setItem(i, 1, cell(u["email"] or "—", color=T.TEXT_SECONDARY))
-            role_text = ROLE_LABELS.get(u["role"], u["role"])
+            role_text = ROLE_LABELS.get(u["role"]) or str(u["role"])
             t.setItem(i, 2, cell(role_text))
             chip_cell(t, i, 2, role_text, "info" if u["role"] != "researcher" else "neutral",
                       tooltip=_ROLE_HELP.get(u["role"], ""))
@@ -326,7 +343,8 @@ class UsersPage(QWidget):
                 db2.commit()
                 after = {"username": u.username, "email": u.email,
                          "role": u.role, "active": u.active}
-                changes = {k: [before[k], after[k]] for k in before if before[k] != after[k]}
+                changes: dict = {k: [before[k], after[k]] for k in before
+                                 if before[k] != after[k]}
                 if vals["password"]:
                     changes["password"] = "reset by admin"
                 audit.record("user_updated", details={"user_id": uid, "changes": changes})

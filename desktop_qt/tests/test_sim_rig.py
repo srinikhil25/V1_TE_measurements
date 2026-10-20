@@ -18,9 +18,9 @@ if os.environ.get("CI"):
 else:
     pytest.importorskip("pyvisa_sim")
 
-from pyvisa_sim.devices import Device  # noqa: E402
+from pyvisa_sim.devices import Device
 
-from app.instruments import visa_backend  # noqa: E402
+from app.instruments import visa_backend
 
 UNKNOWN = b"SIM_UNKNOWN_COMMAND"
 PK = "GPIB0::15::INSTR"
