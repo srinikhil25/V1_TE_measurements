@@ -12,6 +12,7 @@ from ..core.config import get_config
 from ..core.database import get_session
 from ..core.run_context import build_run_context
 from ..models.db_models import Measurement, MeasurementIntegrity, MeasurementRow
+from ..services.ir_regions import camera_snapshot
 from .instrument import SeebeckSystem
 from .safety import SafetyMonitor
 from .seebeck_analysis import binned_seebeck_analysis, polarity_verdict, polarity_vote
@@ -496,6 +497,9 @@ class MeasurementSessionManager:
                     "valid": check.valid,
                     "flag": check.abort_reason or check.flag_text,
                 }
+                # Camera region means at this reading ("IR R1 [oC]", ...);
+                # nothing when the camera is off or its frame is stale.
+                row.update(camera_snapshot(t1, t2))
                 with self.lock:
                     self.session_data.append(row)
                     seq = len(self.session_data)

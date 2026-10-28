@@ -70,6 +70,26 @@ def _clamp(v, lo, hi):
     return max(lo, min(hi, v))
 
 
+def profile_duration_s(params: dict) -> float:
+    """Pre-heat + ramp up + hold + ramp down (cooling tail not included)."""
+    i0 = float(params.get("start_volt", 0.0))
+    ip = float(params.get("stop_volt", 1.0))
+    di = max(ip - i0, 0.0)
+    return (float(params.get("pre_time", 0)) + di / max(float(params.get("inc_rate", 1.0)), 1e-9)
+            + float(params.get("hold_time", 0)) + di / max(float(params.get("dec_rate", 1.0)), 1e-9))
+
+
+def fmt_duration(s: float) -> str:
+    s = round(float(s))
+    h, rem = divmod(s, 3600)
+    m, sec = divmod(rem, 60)
+    if h:
+        return f"{h} h {m:02d} min"
+    if m:
+        return f"{m} min {sec:02d} s"
+    return f"{sec} s"
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 class SeebeckWaveformWidget(QWidget):
     """

@@ -210,3 +210,25 @@ def test_run_is_saved_row_by_row_with_outcome(cfg, app_db, monkeypatch):
     assert entries[1]["details"]["outcome"] == sm.STATUS_ABORTED
     assert "over-temperature" in entries[1]["reason"]
     assert audit.verify_chain()["ok"]
+
+
+def test_camera_regions_are_recorded_with_each_reading(cfg, monkeypatch):
+    seen = []
+
+    def snap(t_hot, t_cold):
+        seen.append((t_hot, t_cold))
+        return {"IR R1 [oC]": 30.0}
+
+    monkeypatch.setattr(sm, "camera_snapshot", snap)
+    mgr = make(FakeRig())
+    run(mgr)
+    data = mgr.get_data()
+    assert data and all(r["IR R1 [oC]"] == 30.0 for r in data)
+    assert seen[0] == (data[0]["Temp1 [oC]"], data[0]["Temp2 [oC]"])
+
+
+def test_no_camera_no_camera_columns(cfg, monkeypatch):
+    monkeypatch.setattr(sm, "camera_snapshot", lambda *_a: {})
+    mgr = make(FakeRig())
+    run(mgr)
+    assert not any(k.startswith("IR ") for r in mgr.get_data() for k in r)

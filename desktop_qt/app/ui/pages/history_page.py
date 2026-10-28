@@ -678,8 +678,9 @@ class RunDetailWindow(QWidget):
 
     # ── Seebeck ───────────────────────────────────────────────────────
     def _build_seebeck(self):
-        from .seebeck_page import _TABLE_COLS
+        from .seebeck_page import table_cols
         data = self._data
+        cols_def = table_cols(data)     # camera columns only when recorded
         nan = float("nan")
 
         def _v(lst):
@@ -786,13 +787,13 @@ class RunDetailWindow(QWidget):
             pb.body.addWidget(tb)
             self._body.addWidget(pb)
 
-        headers = [c[1] for c in _TABLE_COLS]
+        headers = [c[1] for c in cols_def]
         pt = Panel(f"Readings · {len(data)} rows", flush=True)
         tbl = make_table(headers, row_height=24, mono=True)
         tbl.horizontalHeader().setDefaultAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         tbl.setRowCount(len(data))
         for i, row in enumerate(data):
-            for j, (key, _, fmt) in enumerate(_TABLE_COLS):
+            for j, (key, _, fmt) in enumerate(cols_def):
                 val = row.get(key)
                 tbl.setItem(i, j, cell("—" if val is None else fmt.format(val), align="right"))
         for j in range(len(headers)):
@@ -801,7 +802,7 @@ class RunDetailWindow(QWidget):
         pt.body.addWidget(tbl)
         self._body.addWidget(pt)
 
-        cols = [(k, h) for k, h, _ in _TABLE_COLS]
+        cols = [(k, h) for k, h, _ in cols_def]
         mode = self._params.get("probe_mode")
         info = self._info("Seebeck", [("Geometry", {"in_plane": "In-plane",
                                                     "out_plane": "Out-of-plane"}.get(mode, mode))]
